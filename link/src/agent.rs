@@ -302,10 +302,13 @@ impl Agent {
         }
         // ¿Concedió el control? Si no, la sesión es sólo de vista (con el motivo, si lo hay).
         let granted: Value = serde_json::from_slice(&m[1..]).unwrap_or(Value::Null);
-        let control = control && granted.get("control").and_then(Value::as_bool).unwrap_or(false);
-        if let Some(note) = granted.get("note").and_then(Value::as_str).filter(|n| !n.is_empty()) {
-            self.toast(format!("{name}: {note}"), false);
+        let note = granted.get("note").and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_string)
+            .or_else(|| (control && !granted.get("control").and_then(Value::as_bool).unwrap_or(false)).then(|| "aceptó sólo ver, sin control".into()));
+        if let Some(note) = note {
+            store::log(&format!("{name}: {note}"));
+            self.toast(format!("{name}: {note}"), true);
         }
+        let control = control && granted.get("control").and_then(Value::as_bool).unwrap_or(false);
         self.set_session(session, |s| s.control = control);
         // Recordar el dispositivo (su identidad, para detectar cambios).
         {
@@ -397,7 +400,8 @@ impl Agent {
         let key = net::hex(&ch.peer);
         let (trusted, mut control) = self.st.lock().unwrap().saved.iter().find(|s| s.key == key && s.trusted)
             .map(|s| (true, s.control)).unwrap_or((false, false));
-        if !trusted {
+        // Se pregunta si no es de confianza o si pide un control que no tenía concedido (p. ej. recordado sólo para ver).
+        if !trusted || (wants_control && !control) {
             // Hay que aceptar en este equipo: la app se muestra con la petición y el código.
             let req = self.id();
             let (tx, rx) = channel();
@@ -433,7 +437,8 @@ impl Agent {
         // Control de teclado y ratón: pedido, concedido y, en macOS, con el permiso de Accesibilidad.
         let mut note = String::new();
         let control = wants_control && control && if platform::input_allowed() == Some(false) {
-            note = format!("sólo vista: {} no ha dado a Kast el permiso de Accesibilidad", self.name);
+            note = format!("sólo vista: en {}, Kast no tiene el permiso de Accesibilidad (allí: Kast → Dispositivos → Dar permiso)", self.name);
+            store::log(&format!("{name} pidió control, pero falta el permiso de Accesibilidad"));
             self.toast(format!("{name} quiere controlar tu pantalla, pero Kast no tiene permiso de Accesibilidad: pulsa «Dar permiso»"), true);
             self.emit(json!({"t": "link", "ev": "show"}));
             false
@@ -487,6 +492,7 @@ impl Agent {
 
     fn discovery_loop(self: &Arc<Self>) {
         let mut tick = 0u64;
+        let mut perms = (platform::capture_allowed(), platform::input_allowed());
         loop {
             if tick % 5 == 0 {
                 let d: Vec<(u32, u32)> = platform::displays().map(|v| v.iter().map(|d| (d.w, d.h)).collect()).unwrap_or_default();
@@ -509,7 +515,9 @@ impl Agent {
                 }
                 changed
             };
-            if changed { self.emit_state(); }
+            // Permisos de macOS concedidos (o retirados) desde Ajustes del Sistema.
+            let now = (platform::capture_allowed(), platform::input_allowed());
+            if changed || now != perms { perms = now; self.emit_state(); }
             tick += 1;
             std::thread::sleep(Duration::from_secs(2));
         }

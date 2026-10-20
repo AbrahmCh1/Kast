@@ -88,6 +88,33 @@ try:
     B.send(cmd="answer", req=req2["req"], accept=False, remember=False)
     toast = A.wait(lambda m: m.get("ev") == "toast" and m.get("err"))
     print(f"5) rechazada: A recibe «{toast['msg']}»")
+
+    def live_session():
+        st = A.wait(state(lambda m: any(s["dir"] == "in" and s["state"] == "live" for s in m["sessions"])), 30)
+        return next(s for s in st["sessions"] if s["dir"] == "in")
+
+    def hang_up(s):
+        A.send(cmd="disconnect", session=s["session"])
+        A.wait(state(lambda m: not m["sessions"]))
+        B.wait(state(lambda m: not m["sessions"]))
+
+    # B recuerda a A sólo para ver: después ve sin preguntar, pero si pide control vuelve a preguntar.
+    A.send(cmd="connect", id=me_b["id"], monitor=1, show_on=0, control=False)
+    req3 = B.wait(lambda m: m.get("ev") == "request")
+    B.send(cmd="answer", req=req3["req"], accept=True, remember=True, control=False)
+    hang_up(live_session())
+    A.send(cmd="connect", id=me_b["id"], monitor=1, show_on=0, control=False)
+    s = live_session()
+    assert not s["control"]
+    hang_up(s)
+    A.send(cmd="connect", id=me_b["id"], monitor=1, show_on=0, control=True)
+    req4 = B.wait(lambda m: m.get("ev") == "request")
+    assert req4["control"] is True
+    B.send(cmd="answer", req=req4["req"], accept=True, remember=True, control=True)
+    s = live_session()
+    assert s["control"] == want
+    hang_up(s)
+    print("6) recordado sólo para ver: entra sin preguntar; al pedir control, vuelve a preguntar")
     print("OK")
 finally:
     for a in (A, B):

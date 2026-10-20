@@ -21,6 +21,11 @@ pub fn input_allowed() -> Option<bool> { Some(unsafe { AXIsProcessTrusted() }) }
 
 /// Pide el permiso (aviso del sistema) y abre su panel en Ajustes del Sistema.
 pub fn request_input() {
+    // Kast se firma ad hoc: tras actualizarlo, macOS puede mostrarlo activado en Accesibilidad sin confiar
+    // en la versión nueva. Se borra esa entrada caducada para que el aviso la vuelva a crear.
+    if !unsafe { AXIsProcessTrusted() } {
+        let _ = std::process::Command::new("tccutil").args(["reset", "Accessibility", "io.github.abrahmch1.kast"]).status();
+    }
     let trusted = unsafe {
         let key = &*(kAXTrustedCheckOptionPrompt as *const CFString);
         let yes: &CFBoolean = kCFBooleanTrue.unwrap();
