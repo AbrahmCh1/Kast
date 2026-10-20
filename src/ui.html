@@ -1,0 +1,866 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Kast</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f3f3f3; --text: #1a1a1a; --sub: #5e5e5e; --faint: #8a8a8a;
+  --card: rgba(255,255,255,.74); --card2: rgba(255,255,255,.5); --stroke: rgba(0,0,0,.075);
+  --hover: rgba(0,0,0,.045); --press: rgba(0,0,0,.07); --field: rgba(255,255,255,.85);
+  --accent: #4361ee; --accent2: #7c3aed; --on-accent: #fff; --track: rgba(0,0,0,.22);
+  --thumb-ring: #fff; --danger: #c42b1c; --ok: #0f7b0f; --shadow: 0 8px 32px rgba(0,0,0,.14);
+  --side: rgba(255,255,255,0);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #202020; --text: #fff; --sub: #a9a9a9; --faint: #7d7d7d;
+    --card: rgba(255,255,255,.055); --card2: rgba(255,255,255,.035); --stroke: rgba(255,255,255,.075);
+    --hover: rgba(255,255,255,.06); --press: rgba(255,255,255,.04); --field: rgba(255,255,255,.06);
+    --accent: #8197ff; --accent2: #a78bfa; --on-accent: #0b0b14; --track: rgba(255,255,255,.3);
+    --thumb-ring: #454545; --danger: #ff99a4; --ok: #6ccb5f; --shadow: 0 8px 32px rgba(0,0,0,.45);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg); color: var(--text); overflow: hidden;
+  font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased; user-select: none;
+}
+html.mica body { background: transparent; }
+button, input, select, textarea { font: inherit; color: inherit; }
+svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+.app { display: grid; grid-template-columns: 228px 1fr; height: 100%; }
+nav { display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; background: var(--side); }
+.brand { display: flex; align-items: center; gap: 11px; padding: 4px 8px 20px; }
+.brand .logo { width: 34px; height: 34px; flex: none; filter: drop-shadow(0 3px 8px rgba(67,97,238,.35)); }
+.brand b { display: block; font: 600 16px/1.2 "Segoe UI Variable Display", "Segoe UI", sans-serif; }
+.brand small { display: block; font-size: 11.5px; color: var(--sub); }
+.nav, .btn, .seg button, .mbox { transition: background .12s, border-color .12s, color .12s, transform .12s, box-shadow .12s; }
+button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:focus:not(:focus-visible) { outline: none; }
+.ver { padding: 0 12px 4px; font-size: 11px; color: var(--faint); }
+.nav { position: relative; display: flex; align-items: center; gap: 12px; padding: 9px 12px; border: 0; border-radius: 6px; background: none; text-align: left; cursor: default; }
+.nav:hover { background: var(--hover); }
+.nav.active { background: var(--hover); font-weight: 600; }
+.nav.active::before { content: ""; position: absolute; left: 0; top: 50%; width: 3px; height: 16px; margin-top: -8px; border-radius: 2px; background: var(--accent); }
+.nav .count { margin-left: auto; font-size: 12px; color: var(--sub); font-weight: 400; }
+.grow { flex: 1; }
+.svc { display: flex; align-items: center; gap: 8px; padding: 10px 12px; font-size: 12px; color: var(--sub); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+
+main { overflow-y: auto; padding: 26px 34px 90px 26px; scrollbar-gutter: stable; }
+main::-webkit-scrollbar { width: 10px; }
+main::-webkit-scrollbar-thumb { background: var(--track); border-radius: 5px; border: 3px solid transparent; background-clip: content-box; }
+section { display: none; max-width: 1020px; animation: in .18s ease-out; }
+section.active { display: block; }
+@keyframes in { from { opacity: 0; transform: translateY(6px); } }
+.head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+h1 { margin: 0; font: 600 28px/1.2 "Segoe UI Variable Display", "Segoe UI", sans-serif; }
+h2 { margin: 26px 0 10px; font-size: 14px; font-weight: 600; }
+.desc { color: var(--sub); margin: -10px 0 18px; }
+
+.card { background: var(--card); border: 1px solid var(--stroke); border-radius: 8px; padding: 16px 18px; }
+.stack > * + * { margin-top: 4px; }
+.sub { color: var(--sub); font-size: 12.5px; }
+.mono { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12.5px; }
+
+.btn { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border-radius: 5px; border: 1px solid var(--stroke); background: var(--field); cursor: default; white-space: nowrap; }
+.btn:hover { background: var(--hover); }
+.btn:active { background: var(--press); color: var(--sub); }
+.btn.primary { background: var(--accent); border-color: transparent; color: var(--on-accent); font-weight: 600; }
+.btn.primary:hover { filter: brightness(1.07); }
+.btn.ghost { background: none; border-color: transparent; }
+.btn.ghost:hover { background: var(--hover); }
+.btn.icon { width: 32px; padding: 0; justify-content: center; }
+.btn.danger { color: var(--danger); }
+.btn:disabled { opacity: .45; pointer-events: none; }
+.btns { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* mapa de monitores */
+.map-card { padding: 0; overflow: hidden; }
+#map { position: relative; height: 190px; margin: 18px; }
+.mbox { position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; border-radius: 8px; border: 1px solid var(--stroke); cursor: default; overflow: hidden;
+  background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 12%, var(--card2)), var(--card2) 70%); box-shadow: inset 0 0 0 3px var(--card2); }
+.mbox:hover { border-color: var(--accent); transform: translateY(-1px); }
+.mbox .n { font: 600 24px/1.1 "Segoe UI Variable Display", "Segoe UI"; }
+.mbox .nm { font-size: 11.5px; font-weight: 600; max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mbox .res { font-size: 11px; color: var(--sub); }
+.mbox.primary { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent), inset 0 0 0 4px var(--card2); }
+.mbox .star { position: absolute; top: 7px; right: 9px; color: var(--accent); font-size: 12px; }
+.mbox .bar { position: absolute; left: 14%; right: 14%; bottom: 9px; height: 3px; border-radius: 2px; background: var(--track); opacity: .55; }
+.mbox .bar i { display: block; height: 100%; width: var(--b, 0%); border-radius: 2px; background: var(--accent); transition: width .2s; }
+.mbox .glow { position: absolute; inset: 0; background: #fff; pointer-events: none; mix-blend-mode: soft-light; }
+.mon-f { display: flex; gap: 4px; flex-wrap: wrap; margin: 0 -6px -4px; padding-top: 10px; border-top: 1px solid var(--stroke); }
+.btn.subtle { background: none; border-color: transparent; color: var(--sub); height: 30px; padding: 0 10px; }
+.btn.subtle:hover { background: var(--hover); border-color: var(--stroke); color: var(--text); }
+.btn.subtle.on { color: var(--accent); }
+.quick { display: flex; align-items: center; gap: 18px; padding: 14px 18px; border-top: 1px solid var(--stroke); background: var(--card2); flex-wrap: wrap; }
+.quick .slider-row { flex: 1; min-width: 260px; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin-top: 12px; }
+.mon { display: flex; flex-direction: column; gap: 12px; transition: box-shadow .3s; }
+.mon.flash { box-shadow: 0 0 0 2px var(--accent); }
+.mon-h { display: flex; align-items: center; gap: 12px; }
+.badge { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; font-weight: 600; background: linear-gradient(135deg, #3884ff, #8b5cf6); color: #fff; flex: none; }
+.mon-h .t { flex: 1; min-width: 0; }
+.mon-h .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pill { font-size: 11.5px; padding: 2px 9px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; white-space: nowrap; }
+.slider-row { display: grid; grid-template-columns: 18px 76px 1fr 38px; align-items: center; gap: 8px; }
+.slider-row output { text-align: right; font-variant-numeric: tabular-nums; color: var(--sub); }
+.fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cal-row { display: grid; grid-template-columns: 110px 1fr 38px; align-items: center; gap: 10px; }
+.cal-row output { text-align: right; color: var(--sub); font-variant-numeric: tabular-nums; }
+.field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--sub); min-width: 0; }
+.note { font-size: 12.5px; color: var(--sub); padding: 8px 10px; border-radius: 6px; background: var(--card2); border: 1px dashed var(--stroke); }
+
+input[type=range] { --p: 50%; -webkit-appearance: none; appearance: none; width: 100%; height: 4px; border-radius: 2px; background: linear-gradient(90deg, var(--accent) var(--p), var(--track) var(--p)); outline: none; margin: 8px 0; }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); border: 5px solid var(--thumb-ring); box-shadow: 0 0 0 1px var(--stroke), 0 1px 3px rgba(0,0,0,.2); transition: border-width .1s; }
+input[type=range]:hover::-webkit-slider-thumb { border-width: 4px; }
+input[type=range]:active::-webkit-slider-thumb { border-width: 6px; }
+input[type=range]:disabled { opacity: .4; }
+
+select, input[type=text], textarea { width: 100%; height: 32px; padding: 0 10px; border-radius: 5px; border: 1px solid var(--stroke); border-bottom-color: color-mix(in srgb, var(--text) 30%, transparent); background: var(--field); outline: none; color: var(--text); }
+select { padding-right: 6px; }
+select option, select optgroup { background: var(--bg); color: var(--text); }
+textarea { height: auto; min-height: 88px; padding: 8px 10px; resize: vertical; font-family: "Cascadia Mono", Consolas, monospace; font-size: 12.5px; user-select: text; }
+input[type=text] { user-select: text; }
+select:focus, input[type=text]:focus, textarea:focus { border-bottom: 2px solid var(--accent); }
+
+.seg { display: inline-flex; align-self: flex-start; border: 1px solid var(--stroke); border-radius: 5px; overflow: hidden; background: var(--field); }
+.seg button { border: 0; background: none; padding: 0 10px; height: 30px; min-width: 44px; cursor: default; font-size: 12.5px; }
+.seg button + button { border-left: 1px solid var(--stroke); }
+.seg button:hover { background: var(--hover); }
+.seg button.on { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { display: inline-flex; align-items: center; gap: 2px; padding: 2px 2px 2px 12px; border-radius: 6px; background: var(--card2); border: 1px solid var(--stroke); }
+.chip .btn { height: 28px; }
+
+/* listas */
+.list { display: flex; flex-direction: column; gap: 4px; }
+.item { display: flex; align-items: center; gap: 14px; padding: 12px 14px 12px 18px; }
+.item .ic { width: 34px; height: 34px; border-radius: 8px; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); flex: none; }
+.item .ic svg { width: 18px; height: 18px; }
+.item .body { flex: 1; min-width: 0; }
+.item .name { font-weight: 600; }
+.item .code { color: var(--sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empty { padding: 34px; text-align: center; color: var(--sub); }
+
+kbd { display: inline-block; min-width: 24px; padding: 1px 7px; border-radius: 4px; border: 1px solid var(--stroke); border-bottom-width: 2px; background: var(--field); font: 600 12px "Segoe UI", sans-serif; text-align: center; }
+.combo { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.combo .plus { color: var(--faint); font-size: 11px; }
+
+.hk { display: grid; grid-template-columns: 230px 1fr 32px; gap: 12px; align-items: center; padding: 10px 12px 10px 14px; }
+.hk.bad { border-color: color-mix(in srgb, var(--danger) 60%, transparent); }
+.capbtn { justify-content: flex-start; height: 36px; width: 100%; }
+.capbtn.rec { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); color: var(--accent); }
+.act { display: flex; gap: 8px; min-width: 0; }
+.act select { flex: 1 1 50%; }
+.act input { flex: 1 1 50%; }
+.warn { color: var(--danger); font-size: 12px; }
+
+.toggle { display: flex; align-items: center; gap: 14px; }
+.switch { position: relative; width: 40px; height: 20px; flex: none; }
+.switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+.switch span { position: absolute; inset: 0; border-radius: 10px; border: 1px solid var(--sub); transition: .15s; }
+.switch span::after { content: ""; position: absolute; left: 3px; top: 3px; width: 12px; height: 12px; border-radius: 50%; background: var(--sub); transition: .15s; }
+.switch input:checked + span { background: var(--accent); border-color: var(--accent); }
+.switch input:checked + span::after { left: 23px; background: var(--on-accent); }
+.row { display: flex; align-items: center; gap: 16px; }
+.row .body { flex: 1; }
+pre.help { margin: 0; white-space: pre-wrap; user-select: text; max-height: 340px; overflow: auto; }
+.console { display: flex; gap: 8px; }
+.console input { flex: 1; font-family: "Cascadia Mono", Consolas, monospace; font-size: 12.5px; }
+pre.out { margin: 10px 0 0; padding: 10px 12px; border-radius: 6px; background: var(--card2); border: 1px solid var(--stroke); min-height: 40px; white-space: pre-wrap; user-select: text; }
+.log { white-space: pre-wrap; font-size: 12.5px; color: var(--sub); }
+
+/* barra de guardado, toast, modal */
+.savebar { position: fixed; left: 50%; bottom: 18px; transform: translate(-50%, 0); display: flex; align-items: center; gap: 14px; padding: 10px 10px 10px 18px; border-radius: 8px; background: var(--bg); border: 1px solid var(--stroke); box-shadow: var(--shadow); transition: transform .2s, opacity .2s; z-index: 5; margin-left: 114px; }
+.savebar.hidden { transform: translate(-50%, 30px); opacity: 0; pointer-events: none; }
+.toast { position: fixed; left: 50%; top: 16px; transform: translate(-50%, -20px); margin-left: 114px; padding: 9px 16px; border-radius: 8px; background: var(--bg); border: 1px solid var(--stroke); box-shadow: var(--shadow); opacity: 0; transition: .2s; z-index: 9; max-width: 560px; white-space: pre-wrap; pointer-events: none; }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast.err { border-color: color-mix(in srgb, var(--danger) 50%, transparent); }
+.toast .ti { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: 9px; border-radius: 50%; background: var(--ok); color: #fff; font: 700 11px "Segoe UI"; vertical-align: -3px; }
+.toast.err .ti { background: var(--danger); }
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.32); display: grid; place-items: center; z-index: 8; animation: fade .12s; }
+@keyframes fade { from { opacity: 0; } }
+.modal.hidden { display: none; }
+.dlg { width: min(540px, 92vw); border-radius: 8px; background: var(--bg); border: 1px solid var(--stroke); box-shadow: var(--shadow); overflow: hidden; animation: pop .16s ease-out; }
+@keyframes pop { from { transform: scale(.96); opacity: 0; } }
+.dlg .content { padding: 22px 24px; display: flex; flex-direction: column; gap: 12px; }
+.dlg h3 { margin: 0; font: 600 19px "Segoe UI Variable Display", "Segoe UI"; }
+.dlg p { margin: 0; }
+.dlg .foot { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 24px; background: var(--card2); border-top: 1px solid var(--stroke); }
+.dlg .foot .btn { min-width: 110px; justify-content: center; }
+.checks { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; }
+.checks label { display: flex; align-items: center; gap: 6px; }
+input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.loading { padding: 40px; text-align: center; color: var(--sub); }
+.spin { width: 22px; height: 22px; border: 2.5px solid var(--stroke); border-top-color: var(--accent); border-radius: 50%; animation: sp .8s linear infinite; margin: 0 auto 10px; }
+@keyframes sp { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-mon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M9 20h6M12 16v4"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3.5 2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.8l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-contrast" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v18a9 9 0 0 0 0-18z" fill="currentColor"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.8-3.5M4 4v4h4M4 13a8 8 0 0 0 14.8 3.5M20 20v-4h-4"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 13h12l1-13M9 7V4h6v3"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v9M6.3 6.3a8 8 0 1 0 11.4 0"/></symbol>
+  <symbol id="i-extend" viewBox="0 0 24 24"><rect x="2" y="6" width="9" height="8" rx="1.5"/><rect x="13" y="6" width="9" height="8" rx="1.5"/><path d="M5 18h14"/></symbol>
+  <symbol id="i-clone" viewBox="0 0 24 24"><rect x="3" y="3" width="13" height="10" rx="1.5"/><rect x="8" y="9" width="13" height="10" rx="1.5"/></symbol>
+  <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5zM8 3v5h7V3M8 21v-7h8v7"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-term" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M12 15h5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+</svg>
+
+<div class="app">
+  <nav>
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
+        <defs>
+          <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2f80ff"/><stop offset="1" stop-color="#8e54f7"/></linearGradient>
+          <linearGradient id="lh" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".28"/><stop offset=".55" stop-color="#fff" stop-opacity="0"/></linearGradient>
+        </defs>
+        <rect x="3" y="3" width="58" height="58" rx="14" fill="url(#lg)"/>
+        <rect x="3" y="3" width="58" height="58" rx="14" fill="url(#lh)"/>
+        <g fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="13" y="15" width="38" height="26" rx="5"/><path d="M32 41v6M23 48h18"/><circle cx="32" cy="28" r="7.5" stroke-width="3"/>
+        </g>
+        <path d="M32 20.5a7.5 7.5 0 0 0 0 15z" fill="#fff"/>
+      </svg>
+      <div><b>Kast</b><small>Control de pantallas</small></div>
+    </div>
+    <button class="nav active" data-tab="pantallas"><svg class="i"><use href="#i-mon"/></svg>Pantallas</button>
+    <button class="nav" data-tab="favoritos"><svg class="i"><use href="#i-star"/></svg>Favoritos<span class="count" id="nfav"></span></button>
+    <button class="nav" data-tab="atajos"><svg class="i"><use href="#i-key"/></svg>Atajos<span class="count" id="nhk"></span></button>
+    <button class="nav" data-tab="ajustes"><svg class="i"><use href="#i-gear"/></svg>Ajustes</button>
+    <div class="grow"></div>
+    <div class="svc"><span class="dot"></span><span id="svc">Servicio activo</span></div>
+    <div class="ver">Kast 1.0 · código abierto (MIT)</div>
+  </nav>
+
+  <main>
+    <section id="tab-pantallas" class="active">
+      <div class="head"><h1>Pantallas</h1><div class="grow"></div>
+        <button class="btn ghost" id="refresh" title="Volver a leer los monitores"><svg class="i"><use href="#i-refresh"/></svg>Actualizar</button></div>
+      <p class="desc">Brillo, contraste, entradas y disposición de tus monitores. Haz clic en uno del mapa para ir a sus ajustes.</p>
+      <div class="card map-card">
+        <div id="map"><div class="loading"><div class="spin"></div>Leyendo monitores…</div></div>
+        <div class="quick">
+          <div class="slider-row"><svg class="i"><use href="#i-sun"/></svg><span>Todos</span><input type="range" id="allB" min="0" max="100"><output id="allBo"></output></div>
+          <div class="btns">
+            <button class="btn" id="extend"><svg class="i"><use href="#i-extend"/></svg>Extender</button>
+            <button class="btn" id="clone"><svg class="i"><use href="#i-clone"/></svg>Duplicar</button>
+            <button class="btn" id="off"><svg class="i"><use href="#i-power"/></svg>Apagar pantallas</button>
+          </div>
+        </div>
+      </div>
+      <div class="grid" id="mons"></div>
+      <h2>Disposiciones guardadas</h2>
+      <div class="card row">
+        <div class="body"><div class="chips" id="layouts"></div></div>
+        <button class="btn" id="layoutSave"><svg class="i"><use href="#i-save"/></svg>Guardar la actual</button>
+      </div>
+    </section>
+
+    <section id="tab-favoritos">
+      <div class="head"><h1>Favoritos</h1><div class="grow"></div>
+        <button class="btn primary" id="favNew"><svg class="i"><use href="#i-plus"/></svg>Nuevo favorito</button></div>
+      <p class="desc">Configuraciones que aplicas con un clic, desde el menú de la bandeja o con un atajo.</p>
+      <div class="list" id="favs"></div>
+    </section>
+
+    <section id="tab-atajos">
+      <div class="head"><h1>Atajos</h1><div class="grow"></div>
+        <button class="btn primary" id="hkNew"><svg class="i"><use href="#i-plus"/></svg>Añadir atajo</button></div>
+      <p class="desc">Haz clic en un atajo y pulsa la combinación nueva. Funcionan en todo Windows.<br>
+        Ojo: <b>Ctrl + Alt equivale a AltGr</b>; evita combinaciones que uses para escribir (en tu teclado, AltGr + Q es @).</p>
+      <div class="list" id="hks"></div>
+      <div class="log" id="hkLog" style="margin-top:14px"></div>
+    </section>
+
+    <section id="tab-ajustes">
+      <div class="head"><h1>Ajustes</h1></div>
+      <div class="list">
+        <div class="card row">
+          <div class="body"><div class="name" style="font-weight:600">Iniciar con Windows</div><div class="sub">Kast arranca en la bandeja al iniciar sesión.</div></div>
+          <label class="switch"><input type="checkbox" id="autostart"><span></span></label>
+        </div>
+        <div class="card row">
+          <div class="body"><div style="font-weight:600">Ocultar el puntero mientras escribes</div><div class="sub">Opción de Windows. Si el cursor desaparece al escribir, desactívala.</div></div>
+          <label class="switch"><input type="checkbox" id="vanish"><span></span></label>
+        </div>
+        <div class="card row">
+          <div class="body"><div style="font-weight:600">Carpeta de Kast</div><div class="sub mono" id="dir"></div></div>
+          <button class="btn" id="folder"><svg class="i"><use href="#i-folder"/></svg>Abrir</button>
+        </div>
+        <div class="card">
+          <div style="font-weight:600;margin-bottom:8px">Consola</div>
+          <div class="console"><input type="text" id="cmd" placeholder="b all 50; c all 60" spellcheck="false"><button class="btn primary" id="cmdRun"><svg class="i"><use href="#i-term"/></svg>Ejecutar</button></div>
+          <pre class="out mono" id="cmdOut"></pre>
+        </div>
+        <div class="card">
+          <div style="font-weight:600;margin-bottom:8px">Referencia de comandos</div>
+          <pre class="help mono" id="help"></pre>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="savebar hidden" id="savebar"><span>Tienes cambios sin guardar</span>
+  <button class="btn" id="discard">Descartar</button><button class="btn primary" id="save">Guardar</button></div>
+<div class="toast" id="toast"></div>
+<div class="modal hidden" id="modal"></div>
+
+<script>
+'use strict';
+if (window.KAST && KAST.mica) document.documentElement.classList.add('mica');
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const el = html => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
+const icon = (n, cls = 'i') => `<svg class="${cls}"><use href="#i-${n}"/></svg>`;
+const post = m => window.chrome?.webview?.postMessage(m);
+
+const INPUTS = [['hdmi1', 0x11, 'HDMI 1'], ['hdmi2', 0x12, 'HDMI 2'], ['dp1', 0x0f, 'DisplayPort 1'], ['dp2', 0x10, 'DisplayPort 2'],
+  ['usbc', 0x1b, 'USB-C'], ['usbc2', 0x1c, 'USB-C 2'], ['dvi1', 0x03, 'DVI'], ['vga1', 0x01, 'VGA']];
+const PRESETS = [['b c +10', 'Subir brillo (monitor del cursor)'], ['b c -10', 'Bajar brillo (monitor del cursor)'],
+  ['b all +10', 'Subir brillo (todos)'], ['b all -10', 'Bajar brillo (todos)'], ['off', 'Apagar pantallas'],
+  ['lock; off', 'Bloquear y apagar pantallas'], ['topo extend', 'Extender pantallas'], ['topo clone', 'Duplicar pantallas'],
+  ['primary c', 'Principal = monitor del cursor'], ['ui', 'Abrir Kast']];
+
+let S = null, favs = [], hks = [], cal = {}, dirty = false, sig = '', pointerDown = false;
+
+/* ---------- comunicación con kastd ---------- */
+const queue = []; let busy = null;
+function run(line, o = {}) {
+  const job = { line, ...o };
+  if (o.key) { const i = queue.findIndex(j => j.key === o.key); if (i >= 0) { queue[i] = job; return pump(); } }
+  queue.push(job); pump();
+}
+function pump() { if (busy || !queue.length) return; busy = queue.shift(); post('exec\n' + busy.line); }
+const runP = (line, o = {}) => new Promise(res => run(line, { ...o, onDone: res }));
+let extTimer;
+const H = {
+  state: m => applyState(m),
+  done: m => {
+    const j = busy; busy = null;
+    if (m.rc && !j?.quiet) toast(m.out.trim() || 'Error al ejecutar ' + j.line, true);
+    else if (j?.ok) toast(j.ok);
+    j?.onDone?.(m);
+    if (j?.refresh) post('state');
+    pump();
+  },
+  ext: () => { clearTimeout(extTimer); extTimer = setTimeout(() => { if (!busy && !queue.length) post('state'); }, 500); },
+  saved: m => { setDirty(false); showLog(m.log); post('state'); toast(m.log.includes('en uso') ? 'Guardado, pero algún atajo está en uso' : 'Guardado', m.log.includes('en uso')); },
+  autostart: m => { $('#autostart').checked = m.autostart; toast(m.autostart ? 'Kast se iniciará con Windows' : 'Inicio automático desactivado'); },
+};
+window.chrome?.webview?.addEventListener('message', e => H[e.data.t]?.(e.data));
+
+/* ---------- utilidades de UI ---------- */
+let toastT;
+function toast(msg, err) {
+  const t = $('#toast'); t.innerHTML = `<span class="ti">${err ? '!' : '✓'}</span>${esc(msg)}`; t.className = 'toast show' + (err ? ' err' : '');
+  clearTimeout(toastT); toastT = setTimeout(() => t.className = 'toast' + (err ? ' err' : ''), err ? 5000 : 2200);
+}
+function modal({ title, body = '', ok = 'Aceptar', cancel = 'Cancelar', danger, timeout, onOpen, validate }) {
+  return new Promise(res => {
+    const m = $('#modal');
+    m.innerHTML = `<div class="dlg"><div class="content"><h3>${esc(title)}</h3>${body}</div>
+      <div class="foot">${cancel ? `<button class="btn" data-r="0">${esc(cancel)}</button>` : ''}<button class="btn primary${danger ? ' danger' : ''}" data-r="1">${esc(ok)}</button></div></div>`;
+    m.classList.remove('hidden');
+    let iv;
+    const close = v => {
+      if (capturing) endCapture(null);
+      if (v && validate && !validate(m)) return;
+      clearInterval(iv); m.classList.add('hidden'); document.removeEventListener('keydown', key, true); res(v ? (onOpen ? m : true) : false);
+    };
+    const key = e => {
+      if (capturing) return;
+      if (e.key === 'Escape') { e.preventDefault(); close(false); }
+      if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') { e.preventDefault(); close(true); }
+    };
+    document.addEventListener('keydown', key, true);
+    m.onclick = e => { const b = e.target.closest('[data-r]'); if (b) close(b.dataset.r === '1'); };
+    if (timeout) { let n = timeout; iv = setInterval(() => { n--; const c = $('#cd', m); if (c) c.textContent = n; if (n <= 0) close(false); }, 1000); }
+    onOpen?.(m);
+    ($('input[type=text],textarea', m) || $('[data-r="1"]', m)).focus();
+  });
+}
+async function prompt(title, label, value = '') {
+  let v = null;
+  const m = await modal({ title, body: `<label class="field">${esc(label)}<input type="text" id="pv" value="${esc(value)}" spellcheck="false"></label>`,
+    onOpen: () => {}, validate: m => !!$('#pv', m).value.trim() });
+  if (m) v = $('#pv', m).value.trim();
+  return v;
+}
+/* Aplica un cambio de pantalla y lo revierte si no se confirma en 15 s. */
+function withRevert(line, revert, what) {
+  run(line, { refresh: true, onDone: async m => {
+    if (m.rc) return;
+    const keep = await modal({ title: '¿Mantener esta configuración?', body: `<p>${esc(what)}</p><p class="sub">Se revertirá automáticamente en <b id="cd">15</b> s.</p>`, ok: 'Mantener', cancel: 'Revertir', timeout: 15 });
+    if (!keep) run(revert, { refresh: true, ok: 'Configuración revertida' });
+  } });
+}
+function fill(r) { r.style.setProperty('--p', ((r.value - r.min) / (r.max - r.min) * 100) + '%'); }
+document.addEventListener('pointerdown', () => pointerDown = true);
+document.addEventListener('pointerup', () => pointerDown = false);
+
+/* ---------- navegación ---------- */
+function showTab(name) {
+  $$('.nav').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  $$('section').forEach(s => s.classList.toggle('active', s.id === 'tab-' + name));
+  $('main').scrollTop = 0;
+  if (name === 'ajustes' && !$('#help').textContent) run('help', { quiet: true, onDone: m => $('#help').textContent = m.out });
+}
+$$('.nav').forEach(b => b.onclick = () => showTab(b.dataset.tab));
+
+/* ---------- estado ---------- */
+function applyState(m) {
+  S = m;
+  const s = JSON.stringify(m.mons.map(x => [x.i, x.name, x.x, x.y, x.w, x.h, x.pw, x.ph, x.hz, x.rot, x.primary, x.b === null, x.modes.length]));
+  if (s !== sig) { sig = s; renderMap(); renderMons(); } else updateMons();
+  if (!dirty) { parseIni(m.ini); renderFavs(); }
+  if (!capturing) renderHks();
+  renderLayouts();
+  $('#autostart').checked = m.autostart;
+  $('#vanish').checked = m.vanish;
+  $('#dir').textContent = m.dir;
+  showLog(m.log);
+}
+function showLog(log) {
+  const lines = (log || '').trim().split('\n').filter(Boolean);
+  $('#svc').textContent = lines.length ? lines[lines.length - 1].replace(/^(\d+) atajos activos, (\d+) favoritos$/, 'Activo · $1 atajos') : 'Servicio activo';
+  $('#hkLog').textContent = lines.slice(0, -1).join('\n');
+}
+
+/* ---------- pantallas ---------- */
+function renderMap() {
+  const map = $('#map'), ms = S.mons;
+  if (!ms.length) { map.innerHTML = '<div class="empty">No se detectaron monitores</div>'; return; }
+  const minX = Math.min(...ms.map(m => m.x)), minY = Math.min(...ms.map(m => m.y));
+  const W = Math.max(...ms.map(m => m.x + m.w)) - minX, Hh = Math.max(...ms.map(m => m.y + m.h)) - minY;
+  const box = map.getBoundingClientRect(), sc = Math.min((box.width - 4) / W, (box.height - 4) / Hh);
+  const ox = (box.width - W * sc) / 2, oy = (box.height - Hh * sc) / 2;
+  map.innerHTML = '';
+  for (const m of ms) {
+    const b = el(`<div class="mbox${m.primary ? ' primary' : ''}" title="${esc(m.name)}${m.primary ? ' · principal' : ''}"><div class="glow"></div>
+      ${m.primary ? '<span class="star">★</span>' : ''}<div class="n">${m.i}</div><div class="nm">${esc(m.name)}</div><div class="res">${m.pw} × ${m.ph} · ${m.hz} Hz</div>
+      ${m.b === null ? '' : '<div class="bar"><i></i></div>'}</div>`);
+    Object.assign(b.style, { left: ox + (m.x - minX) * sc + 2 + 'px', top: oy + (m.y - minY) * sc + 2 + 'px', width: m.w * sc - 4 + 'px', height: m.h * sc - 4 + 'px' });
+    b.onclick = () => { const c = $('#mon-' + m.i); c.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); c.classList.add('flash'); setTimeout(() => c.classList.remove('flash'), 900); };
+    b.dataset.i = m.i;
+    map.appendChild(b);
+  }
+  updateMapGlow();
+}
+function updateMapGlow() {
+  for (const m of S.mons) {
+    const box = $(`.mbox[data-i="${m.i}"]`); if (!box) continue;
+    $('.glow', box).style.opacity = m.b === null ? 0 : (m.b / 100) * .55;
+    if (m.b !== null) box.style.setProperty('--b', m.b + '%');
+  }
+  const bs = S.mons.filter(m => m.b !== null).map(m => m.b), all = $('#allB');
+  if (bs.length && !(pointerDown && document.activeElement === all)) { all.value = Math.round(bs.reduce((a, b) => a + b) / bs.length); $('#allBo').textContent = all.value; fill(all); }
+  all.disabled = !bs.length;
+}
+const modeLabel = v => { const [r, hz] = v.split('@'); return r.replace('x', ' × ') + ' · ' + hz + ' Hz'; };
+function curMode(m) { return (m.rot % 180 ? `${m.ph}x${m.pw}` : `${m.pw}x${m.ph}`) + '@' + m.hz; }
+function renderMons() {
+  const g = $('#mons'); g.innerHTML = '';
+  for (const m of S.mons) {
+    const ddc = m.b !== null;
+    const cur = curMode(m);
+    const modes = m.modes.includes(cur) ? m.modes : [cur, ...m.modes];
+    let inOpts = INPUTS.map(([k, v, n]) => `<option value="${k}"${m.in === v ? ' selected' : ''}>${n}</option>`).join('');
+    if (m.in !== null && !INPUTS.some(x => x[1] === m.in)) inOpts = `<option selected value="0x${m.in.toString(16)}">Otra (0x${m.in.toString(16).padStart(2, '0')})</option>` + inOpts;
+    const c = el(`<div class="card mon" id="mon-${m.i}">
+      <div class="mon-h"><div class="badge">${m.i}</div><div class="t"><div class="title">${esc(m.name)}</div>
+        <div class="sub">${m.pw} × ${m.ph} · ${m.hz} Hz · ${esc(m.dev.replace('\\\\.\\', ''))}</div></div>
+        ${m.primary ? '<span class="pill">★ Principal</span>' : ''}</div>
+      ${ddc ? `
+      <div class="slider-row"><svg class="i"><use href="#i-sun"/></svg><span>Brillo</span><input type="range" min="0" max="100" data-k="b" value="${m.b}"><output>${m.b}</output></div>
+      <div class="slider-row"><svg class="i"><use href="#i-contrast"/></svg><span>Contraste</span><input type="range" min="0" max="100" data-k="c" value="${m.c ?? 50}"${m.c === null ? ' disabled' : ''}><output>${m.c ?? '–'}</output></div>`
+      : `<div class="note">Este monitor no responde a DDC/CI: brillo, contraste y entrada no están disponibles. Revisa que DDC/CI esté activado en el menú del monitor.</div>`}
+      <div class="fields">
+        <label class="field">Entrada<select data-k="in"${m.in === null ? ' disabled' : ''}>${m.in === null ? '<option>—</option>' : inOpts}</select></label>
+        <label class="field">Resolución<select data-k="mode">${modes.map(v => `<option value="${v}"${v === cur ? ' selected' : ''}>${modeLabel(v)}</option>`).join('')}</select></label>
+      </div>
+      <div class="field">Rotación<div class="seg">${[0, 90, 180, 270].map(d => `<button data-rot="${d}" class="${m.rot === d ? 'on' : ''}">${d}°</button>`).join('')}</div></div>
+      ${ddc || !m.primary ? `<div class="mon-f">
+        ${ddc ? `<button class="btn subtle${cal[m.name] ? ' on' : ''}" data-a="cal" title="Igualar el brillo con los demás monitores">${icon('sun')}${cal[m.name] ? 'Calibrado' : 'Calibrar'}</button>` : ''}
+        ${m.primary ? '' : `<button class="btn subtle" data-a="primary" title="Usar como pantalla principal">${icon('star')}Hacer principal</button>
+          <button class="btn subtle" data-a="disable" title="Desactivar este monitor">${icon('power')}Desactivar</button>`}
+      </div>` : ''}
+    </div>`);
+    $$('input[type=range]', c).forEach(r => {
+      fill(r);
+      r.oninput = () => { r.nextElementSibling.textContent = r.value; fill(r); m[r.dataset.k] = +r.value; if (r.dataset.k === 'b') updateMapGlow(); run(`${r.dataset.k} ${m.i} ${r.value}`, { key: r.dataset.k + m.i }); };
+      r.onchange = resync;
+    });
+    $('[data-a=cal]', c)?.addEventListener('click', () => calibrate(m));
+    $('[data-k=in]', c).onchange = async e => {
+      const sel = e.target, name = sel.options[sel.selectedIndex].text;
+      const ok = await modal({ title: 'Cambiar entrada', body: `<p>El monitor <b>${esc(m.name)}</b> cambiará a <b>${esc(name)}</b>.</p><p class="sub">Si esa entrada no tiene señal la pantalla quedará en negro; vuelve con los botones del monitor o desde otra pantalla.</p>`, ok: 'Cambiar' });
+      if (ok) run(`input ${m.i} ${sel.value}`, { refresh: true }); else updateMons(true);
+    };
+    $('[data-k=mode]', c).onchange = e => withRevert(`mode ${m.i} ${e.target.value}`, `mode ${m.i} ${cur}`, `${m.name}: ${modeLabel(e.target.value)}`);
+    $$('[data-rot]', c).forEach(b => b.onclick = () => { if (+b.dataset.rot !== m.rot) withRevert(`rot ${m.i} ${b.dataset.rot}`, `rot ${m.i} ${m.rot}`, `${m.name}: rotación ${b.dataset.rot}°`); });
+    $('[data-a=primary]', c)?.addEventListener('click', () => run(`primary ${m.i}`, { refresh: true, ok: `${m.name} es ahora el principal` }));
+    $('[data-a=disable]', c)?.addEventListener('click', () => withRevert(`layout save _antes; disable ${m.i}`, 'layout load _antes', `${m.name} desactivado`));
+    g.appendChild(c);
+  }
+  updateMapGlow();
+}
+function updateMons(force) {
+  for (const m of S.mons) {
+    const c = $('#mon-' + m.i); if (!c) continue;
+    for (const k of ['b', 'c']) {
+      const r = $(`input[data-k=${k}]`, c);
+      if (!r || m[k] === null || (pointerDown && document.activeElement === r)) continue;
+      r.value = m[k]; r.nextElementSibling.textContent = m[k]; fill(r);
+    }
+    const s = $('[data-k=in]', c), inp = INPUTS.find(x => x[1] === m.in);
+    if (s && inp && (force || document.activeElement !== s)) s.value = inp[0];
+  }
+  updateMapGlow();
+}
+window.addEventListener('resize', () => S && renderMap());
+$('#refresh').onclick = () => { $('#refresh').disabled = true; post('state'); setTimeout(() => $('#refresh').disabled = false, 800); };
+/* Tras soltar un control se vuelve a leer el valor real: un monitor puede ignorar alguna orden DDC/CI. */
+let resyncT;
+function resync() {
+  clearTimeout(resyncT);
+  resyncT = setTimeout(function go() {
+    if (busy || queue.length || pointerDown) { resyncT = setTimeout(go, 300); return; }
+    post('state');
+  }, 900);
+}
+async function calibrate(m) {
+  const before = S.mons.filter(x => x.b !== null).map(x => [x.i, x.braw]);
+  let [lo, hi] = cal[m.name] || [0, 100];
+  const row = (id, label, v) => `<div class="cal-row"><span>${label}</span><input type="range" min="0" max="100" id="${id}" value="${v}"><output>${v}</output></div>`;
+  const ok = await modal({
+    title: `Calibrar brillo · ${m.name}`, ok: 'Aplicar',
+    body: `<p class="sub">Elige qué brillo real de este monitor corresponde al 0 % y al 100 % de Kast, para que con el mismo porcentaje todos los monitores se vean igual. El monitor muestra cada valor mientras mueves el control.</p>
+      ${row('clo', '0 % de Kast', lo)}${row('chi', '100 % de Kast', hi)}
+      <div class="btns"><button class="btn" id="cmp0">Comparar todos al 0 %</button><button class="btn" id="cmp100">Comparar al 100 %</button><div class="grow"></div><button class="btn ghost" id="creset">Restablecer</button></div>
+      <div class="warn" id="cerr"></div>`,
+    onOpen: d => {
+      const L = $('#clo', d), Hi = $('#chi', d);
+      const upd = (r, v) => { r.value = v; r.nextElementSibling.textContent = v; fill(r); };
+      for (const r of [L, Hi]) {
+        fill(r);
+        r.oninput = () => { upd(r, r.value); lo = +L.value; hi = +Hi.value; run(`braw ${m.i} ${r.value}`, { key: 'cal', quiet: true }); };
+      }
+      $('#cmp0', d).onclick = () => { run('b all 0', { quiet: true }); run(`braw ${m.i} ${lo}`, { quiet: true }); };
+      $('#cmp100', d).onclick = () => { run('b all 100', { quiet: true }); run(`braw ${m.i} ${hi}`, { quiet: true }); };
+      $('#creset', d).onclick = () => { upd(L, 0); upd(Hi, 100); lo = 0; hi = 100; };
+    },
+    validate: d => hi - lo >= 5 || ($('#cerr', d).textContent = 'El 100 % debe quedar al menos 5 puntos por encima del 0 %', false),
+  });
+  for (const [i, braw] of before) run(`braw ${i} ${braw}`, { quiet: true });
+  if (!ok) return;
+  if (lo === 0 && hi === 100) delete cal[m.name]; else cal[m.name] = [lo, hi];
+  changed();
+  sig = ''; renderMons();
+  toast('Pulsa Guardar para aplicar la calibración');
+}
+const allB = $('#allB');
+allB.onchange = resync;
+allB.oninput = () => { $('#allBo').textContent = allB.value; fill(allB); for (const m of S.mons) if (m.b !== null) m.b = +allB.value; updateMons(); run(`b all ${allB.value}`, { key: 'ball' }); };
+$('#extend').onclick = () => run('topo extend', { refresh: true, ok: 'Pantallas extendidas' });
+$('#clone').onclick = () => withRevert('layout save _antes; topo clone', 'layout load _antes', 'Pantallas duplicadas');
+$('#off').onclick = () => run('off');
+
+const visibleLayouts = () => (S?.layouts || []).filter(n => !n.startsWith('_') && !n.startsWith('fav-'));
+const layoutOf = act => /^layout\s+load\s+(\S+)$/i.exec(act.trim())?.[1];
+const hkForLayout = n => hks.find(h => layoutOf(h.act)?.toLowerCase() === n.toLowerCase());
+function renderLayouts() {
+  const box = $('#layouts'), ls = visibleLayouts();
+  box.innerHTML = ls.length ? '' : '<span class="sub">Guarda la disposición actual (posición, resolución y monitores activos) para restaurarla cuando quieras.</span>';
+  for (const n of ls) {
+    const hk = hkForLayout(n);
+    const c = el(`<span class="chip">${esc(n)}${hk ? `<span style="margin-left:8px">${comboHtml(hk.combo)}</span>` : ''}
+      <button class="btn ghost icon" title="Aplicar">${icon('play')}</button>
+      <button class="btn ghost icon" title="${hk ? 'Cambiar atajo' : 'Asignar atajo'}">${icon('key')}</button>
+      <button class="btn ghost icon" title="Eliminar">${icon('x')}</button></span>`);
+    const [load, key, del] = $$('button', c);
+    load.onclick = () => withRevert(`layout save _antes; layout load ${n}`, 'layout load _antes', `Disposición «${n}» aplicada`);
+    key.onclick = () => layoutHotkey(n);
+    del.onclick = async () => {
+      if (!await modal({ title: 'Eliminar disposición', body: `<p>¿Eliminar «${esc(n)}»${hk ? ' y su atajo' : ''}?</p>`, ok: 'Eliminar', danger: true })) return;
+      run(`layout del ${n}`, { refresh: true });
+      if (hk) { hks.splice(hks.indexOf(hk), 1); changed(); }
+    };
+    box.appendChild(c);
+  }
+}
+async function layoutHotkey(n) {
+  const old = hkForLayout(n);
+  let combo = old?.combo || '';
+  const m = await modal({
+    title: `Atajo para «${n}»`, ok: 'Aceptar',
+    body: `<p class="sub">Aplica esta disposición desde cualquier sitio. Haz clic y pulsa la combinación.</p>
+      <div class="row"><button class="btn capbtn" id="lk">${comboHtml(combo)}</button><button class="btn ghost icon" id="lkx" title="Quitar atajo">${icon('x')}</button></div>
+      <div class="warn" id="lerr"></div>`,
+    onOpen: m => {
+      $('#lk', m).onclick = async () => { const v = await captureCombo($('#lk', m)); if (v) combo = v; $('#lk', m).innerHTML = comboHtml(combo); };
+      $('#lkx', m).onclick = () => { combo = ''; $('#lk', m).innerHTML = comboHtml(''); };
+    },
+    validate: m => {
+      const clash = combo && hks.find(h => h.combo === combo && h !== old);
+      if (clash) { $('#lerr', m).textContent = `${prettyCombo(combo)} ya está asignado a «${clash.act}»`; return false; }
+      return true;
+    },
+  });
+  if (!m) return;
+  if (combo && old) old.combo = combo;
+  else if (combo) hks.push({ combo, act: `layout load ${n}` });
+  else if (old) hks.splice(hks.indexOf(old), 1);
+  else return;
+  changed();
+}
+$('#layoutSave').onclick = async () => {
+  const n = await prompt('Guardar disposición', 'Nombre (sin espacios)', 'escritorio');
+  if (!n) return;
+  if (/[\s\\/:*?"<>|;]/.test(n)) return toast('El nombre no puede tener espacios ni \\ / : * ? " < > | ;', true);
+  run(`layout save ${n}`, { refresh: true, ok: `Disposición «${n}» guardada` });
+};
+
+/* ---------- configuración (kast.ini) ---------- */
+function parseIni(text) {
+  favs = []; hks = []; cal = {}; let sec = 0;
+  for (let line of (text || '').split(/\r?\n/)) {
+    line = line.trim();
+    if (!line || line[0] === '#' || line[0] === ';') continue;
+    if (line[0] === '[') {
+      const s = line.toLowerCase();
+      sec = /^\[(favoritos|favorites)\]/.test(s) ? 1 : /^\[(atajos|hotkeys)\]/.test(s) ? 0 : /^\[(calibracion|calibration)\]/.test(s) ? 3 : 2;
+      continue;
+    }
+    const eq = line.indexOf('='); if (eq < 0) continue;
+    const k = line.slice(0, eq).trim(), v = line.slice(eq + 1).trim();
+    if (sec === 1) favs.push({ name: k, act: v });
+    else if (sec === 0) hks.push({ combo: k.toLowerCase().replace(/\s+/g, ''), act: v });
+    else if (sec === 3) { const [lo, hi] = v.split(/\s+/).map(Number); if (hi - lo >= 5) cal[k] = [lo, hi]; }
+  }
+}
+function toIni() {
+  let s = '# Kast — configuración (generada por la interfaz; también puede editarse a mano)\n# Comandos: kast help    Monitores: 1,2,3 | all | p (principal) | c (el del cursor)\n\n[favoritos]\n';
+  for (const f of favs) s += `${f.name} = ${f.act}\n`;
+  s += '\n[atajos]\n';
+  for (const h of hks) if (h.combo && h.act) s += `${h.combo} = ${h.act}\n`;
+  const cs = Object.entries(cal);
+  if (cs.length) {
+    s += '\n# Brillo real (mínimo máximo, en % de la escala del monitor) que corresponde al 0 % y al 100 % de Kast\n[calibracion]\n';
+    for (const [n, [lo, hi]] of cs) s += `${n} = ${lo} ${hi}\n`;
+  }
+  return s;
+}
+function setDirty(v) {
+  dirty = v; $('#savebar').classList.toggle('hidden', !v);
+  $('#nfav').textContent = favs.length || ''; $('#nhk').textContent = hks.length || '';
+}
+function changed() { setDirty(true); renderFavs(); renderHks(); if (S) renderLayouts(); }
+function save() {
+  if (capturing) endCapture(null);
+  const dup = dupCombos();
+  if (dup.size) return toast('Hay atajos repetidos: ' + [...dup].map(prettyCombo).join(', '), true);
+  if (hks.some(h => !h.combo || !h.act)) return toast('Hay atajos sin combinación o sin acción', true);
+  post('save\n' + toIni());
+}
+$('#save').onclick = save;
+$('#discard').onclick = () => { setDirty(false); parseIni(S.ini); renderFavs(); renderHks(); };
+document.addEventListener('keydown', e => { if (e.ctrlKey && e.key.toLowerCase() === 's' && !capturing) { e.preventDefault(); if (dirty) save(); } });
+
+/* ---------- atajos: captura y formato ---------- */
+const CODES = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', PageUp: 'pgup', PageDown: 'pgdn', Home: 'home', End: 'end',
+  Insert: 'ins', Delete: 'del', Space: 'space', Tab: 'tab', Enter: 'enter', Pause: 'pause', ScrollLock: 'scroll', Equal: 'plus', Minus: 'minus',
+  Comma: 'comma', Period: 'period', NumpadAdd: 'numplus', NumpadSubtract: 'numminus', NumpadMultiply: 'nummul', NumpadDivide: 'numdiv' };
+function codeToKey(code) {
+  let m;
+  if ((m = /^Key([A-Z])$/.exec(code))) return m[1].toLowerCase();
+  if ((m = /^Digit(\d)$/.exec(code))) return m[1];
+  if ((m = /^Numpad(\d)$/.exec(code))) return 'num' + m[1];
+  if (/^F([1-9]|1\d|2[0-4])$/.test(code)) return code.toLowerCase();
+  return CODES[code];
+}
+const NICE = { ctrl: 'Ctrl', alt: 'Alt', shift: 'Shift', win: 'Win', up: '↑', down: '↓', left: '←', right: '→', pgup: 'RePág', pgdn: 'AvPág', home: 'Inicio',
+  end: 'Fin', ins: 'Insert', del: 'Supr', space: 'Espacio', tab: 'Tab', enter: 'Enter', esc: 'Esc', pause: 'Pausa', scroll: 'Bloq Despl', plus: '+', minus: '-',
+  comma: ',', period: '.', numplus: 'Num +', numminus: 'Num -', nummul: 'Num *', numdiv: 'Num /' };
+const keyNice = k => NICE[k] || (/^num\d$/.test(k) ? 'Num ' + k[3] : /^f\d+$/.test(k) ? k.toUpperCase() : k.toUpperCase());
+const prettyCombo = c => c.split('+').map(keyNice).join(' + ');
+const comboHtml = c => c ? `<span class="combo">${c.split('+').map(k => `<kbd>${esc(keyNice(k))}</kbd>`).join('<span class="plus">+</span>')}</span>` : '<span class="sub">Sin asignar</span>';
+function dupCombos() { const seen = new Set(), dup = new Set(); for (const h of hks) { if (!h.combo) continue; (seen.has(h.combo) ? dup : seen).add(h.combo); } return dup; }
+
+let capturing = null;
+function captureCombo(btn) {
+  return new Promise(res => {
+    capturing = { res, btn }; btn.classList.add('rec'); btn.innerHTML = '<span>Pulsa la combinación… (Esc cancela)</span>';
+    post('capture\n1');
+  });
+}
+function endCapture(v) {
+  const c = capturing; if (!c) return; capturing = null; post('capture\n0'); c.btn.classList.remove('rec'); c.res(v);
+}
+window.addEventListener('keydown', e => {
+  if (!capturing) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  const mods = [e.ctrlKey && 'ctrl', e.altKey && 'alt', e.shiftKey && 'shift', e.metaKey && 'win'].filter(Boolean);
+  if (['Control', 'Alt', 'Shift', 'Meta', 'OS'].includes(e.key)) { capturing.btn.innerHTML = mods.length ? comboHtml(mods.join('+')) + '<span class="plus"> + …</span>' : '<span>Pulsa la combinación…</span>'; return; }
+  if (e.code === 'Escape' && !mods.length) return endCapture(null);
+  const k = codeToKey(e.code) || (/^[a-z0-9]$/i.test(e.key) ? e.key.toLowerCase() : null); if (!k) return;
+  if (!mods.length && !/^f\d+$/.test(k)) { capturing.btn.innerHTML = '<span class="warn">Usa al menos Ctrl, Alt, Shift o Win</span>'; return; }
+  endCapture([...mods, k].join('+'));
+}, true);
+window.addEventListener('keyup', e => { if (capturing) { e.preventDefault(); e.stopImmediatePropagation(); } }, true);
+window.addEventListener('blur', () => capturing && endCapture(null));
+
+/* ---------- favoritos ---------- */
+function hkFor(name) { return hks.find(h => h.act.toLowerCase() === ('fav ' + name).toLowerCase()); }
+function renderFavs() {
+  const box = $('#favs'); box.innerHTML = '';
+  $('#nfav').textContent = favs.length || '';
+  if (!favs.length) { box.innerHTML = `<div class="card empty">${icon('star')}<div style="margin-top:8px">Aún no hay favoritos. Crea uno con «Nuevo favorito»; puedes capturar el brillo, contraste, entradas y disposición actuales.</div></div>`; return; }
+  favs.forEach((f, i) => {
+    const hk = hkFor(f.name);
+    const it = el(`<div class="card item"><div class="ic">${icon('star')}</div>
+      <div class="body"><div class="name">${esc(f.name)}</div><div class="code mono" title="${esc(f.act)}">${esc(f.act)}</div></div>
+      ${hk ? comboHtml(hk.combo) : ''}
+      <button class="btn" data-a="run">${icon('play')}Aplicar</button>
+      <button class="btn ghost icon" data-a="edit" title="Editar">${icon('edit')}</button>
+      <button class="btn ghost icon" data-a="del" title="Eliminar">${icon('trash')}</button></div>`);
+    $('[data-a=run]', it).onclick = () => run(f.act, { refresh: true, ok: `«${f.name}» aplicado` });
+    $('[data-a=edit]', it).onclick = () => editFav(i);
+    $('[data-a=del]', it).onclick = async () => {
+      if (!await modal({ title: 'Eliminar favorito', body: `<p>¿Eliminar «${esc(f.name)}»${hk ? ' y su atajo' : ''}?</p>`, ok: 'Eliminar', danger: true })) return;
+      favs.splice(i, 1); if (hk) hks.splice(hks.indexOf(hk), 1); changed();
+    };
+    box.appendChild(it);
+  });
+}
+const slug = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'fav';
+function captureLines(o, name) {
+  const ms = S.mons.filter(m => m.b !== null), out = [];
+  if (o.layout) out.push(`layout load fav-${slug(name)}`);
+  for (const k of ['b', 'c']) {
+    if (!o[k]) continue;
+    const vals = ms.filter(m => m[k] !== null);
+    if (vals.length && vals.length === S.mons.length && vals.every(m => m[k] === vals[0][k])) out.push(`${k} all ${vals[0][k]}`);
+    else vals.forEach(m => out.push(`${k} ${m.i} ${m[k]}`));
+  }
+  if (o.in) ms.filter(m => m.in !== null).forEach(m => { const x = INPUTS.find(v => v[1] === m.in); out.push(`input ${m.i} ${x ? x[0] : '0x' + m.in.toString(16)}`); });
+  return out.join('; ');
+}
+async function editFav(i) {
+  const f = i >= 0 ? favs[i] : { name: '', act: '' };
+  const old = hkFor(f.name);
+  let combo = old?.combo || '';
+  const m = await modal({
+    title: i >= 0 ? 'Editar favorito' : 'Nuevo favorito', ok: 'Guardar',
+    body: `<label class="field">Nombre<input type="text" id="fn" value="${esc(f.name)}" placeholder="Noche" spellcheck="false"></label>
+      <div class="field">Rellenar con el estado actual
+        <div class="row"><div class="checks"><label><input type="checkbox" id="cb" checked>Brillo</label><label><input type="checkbox" id="cc" checked>Contraste</label>
+          <label><input type="checkbox" id="ci">Entrada</label><label><input type="checkbox" id="cl">Disposición</label></div>
+          <div class="grow"></div><button class="btn" id="fcap">${icon('refresh')}Capturar</button></div></div>
+      <label class="field">Comandos (separados por ;)<textarea id="fa" spellcheck="false" placeholder="b all 30; c all 50">${esc(f.act)}</textarea></label>
+      <div class="field">Atajo<div class="row"><button class="btn capbtn" id="fk">${comboHtml(combo)}</button><button class="btn ghost icon" id="fkx" title="Quitar atajo">${icon('x')}</button></div></div>
+      <div class="warn" id="ferr"></div>`,
+    onOpen: m => {
+      $('#fcap', m).onclick = () => {
+        const name = $('#fn', m).value.trim() || 'favorito', o = { b: $('#cb', m).checked, c: $('#cc', m).checked, in: $('#ci', m).checked, layout: $('#cl', m).checked };
+        if (o.layout) run(`layout save fav-${slug(name)}`, { quiet: true });
+        $('#fa', m).value = captureLines(o, name);
+      };
+      $('#fk', m).onclick = async () => { const v = await captureCombo($('#fk', m)); if (v) combo = v; $('#fk', m).innerHTML = comboHtml(combo); };
+      $('#fkx', m).onclick = () => { combo = ''; $('#fk', m).innerHTML = comboHtml(''); };
+    },
+    validate: m => {
+      const n = $('#fn', m).value.trim(), a = $('#fa', m).value.trim(), err = $('#ferr', m);
+      if (!n || /[=;\[\]]/.test(n)) return err.textContent = 'Pon un nombre (sin = ; [ ])', false;
+      if (favs.some((x, j) => j !== i && x.name.toLowerCase() === n.toLowerCase())) return err.textContent = 'Ya existe un favorito con ese nombre', false;
+      if (!a) return err.textContent = 'Añade al menos un comando o captura el estado actual', false;
+      const clash = hks.find(h => h.combo === combo && h !== old);
+      if (combo && clash) return err.textContent = `${prettyCombo(combo)} ya está asignado a «${clash.act}»`, false;
+      return true;
+    },
+  });
+  if (!m) return;
+  const name = $('#fn', m).value.trim(), act = $('#fa', m).value.trim().replace(/\s*\n\s*/g, '; ');
+  for (const h of hks) if (h.act.toLowerCase() === ('fav ' + f.name).toLowerCase()) h.act = 'fav ' + name;
+  if (i >= 0) favs[i] = { name, act }; else favs.push({ name, act });
+  const cur = hkFor(name);
+  if (combo && cur) cur.combo = combo;
+  else if (combo) hks.push({ combo, act: 'fav ' + name });
+  else if (cur) hks.splice(hks.indexOf(cur), 1);
+  changed();
+}
+$('#favNew').onclick = () => editFav(-1);
+
+/* ---------- atajos ---------- */
+function renderHks() {
+  const box = $('#hks'), dup = dupCombos(); box.innerHTML = '';
+  $('#nhk').textContent = hks.length || '';
+  if (!hks.length) { box.innerHTML = `<div class="card empty">${icon('key')}<div style="margin-top:8px">No hay atajos. Añade uno para controlar las pantallas desde cualquier sitio.</div></div>`; return; }
+  hks.forEach((h, i) => {
+    const favName = /^fav\s+(.+)$/i.exec(h.act)?.[1];
+    const preset = PRESETS.find(p => p[0] === h.act);
+    const lays = visibleLayouts(), lay = lays.find(n => n.toLowerCase() === layoutOf(h.act)?.toLowerCase());
+    const mode = favName && favs.some(f => f.name.toLowerCase() === favName.toLowerCase()) ? 'fav:' + favName : lay ? 'lay:' + lay : preset ? 'p:' + h.act : 'custom';
+    const opts = `<optgroup label="Favoritos">${favs.length ? favs.map(f => `<option value="fav:${esc(f.name)}">${esc(f.name)}</option>`).join('') : '<option disabled>(sin favoritos)</option>'}</optgroup>
+      <optgroup label="Disposiciones">${lays.length ? lays.map(n => `<option value="lay:${esc(n)}">${esc(n)}</option>`).join('') : '<option disabled>(sin disposiciones)</option>'}</optgroup>
+      <optgroup label="Acciones">${PRESETS.map(p => `<option value="p:${esc(p[0])}">${esc(p[1])}</option>`).join('')}</optgroup>
+      <option value="custom">Comando personalizado…</option>`;
+    const r = el(`<div class="card hk${dup.has(h.combo) || !h.combo ? ' bad' : ''}">
+      <button class="btn capbtn">${comboHtml(h.combo)}</button>
+      <div class="act"><select>${opts}</select><input type="text" class="mono" spellcheck="false" placeholder="b c +10" value="${esc(h.act)}" list="presets"${mode === 'custom' ? '' : ' hidden'}></div>
+      <button class="btn ghost icon" title="Eliminar">${icon('trash')}</button></div>`);
+    const [cap, del] = $$('button', r), sel = $('select', r), inp = $('input', r);
+    sel.value = mode;
+    cap.onclick = async () => { const v = await captureCombo(cap); if (v) { h.combo = v; changed(); } else cap.innerHTML = comboHtml(h.combo); };
+    sel.onchange = () => {
+      const v = sel.value;
+      if (v === 'custom') { inp.hidden = false; inp.focus(); return; }
+      h.act = v.startsWith('fav:') ? 'fav ' + v.slice(4) : v.startsWith('lay:') ? 'layout load ' + v.slice(4) : v.slice(2); changed();
+    };
+    inp.onchange = () => { h.act = inp.value.trim(); setDirty(true); };
+    del.onclick = () => { hks.splice(i, 1); changed(); };
+    box.appendChild(r);
+  });
+}
+$('#hkNew').onclick = async () => {
+  hks.push({ combo: '', act: 'b c +10' }); changed();
+  const rows = $$('#hks .hk'), b = $('.capbtn', rows[rows.length - 1]);
+  b.scrollIntoView({ block: 'nearest' });
+  const v = await captureCombo(b);
+  if (v) { hks[hks.length - 1].combo = v; changed(); } else b.innerHTML = comboHtml('');
+};
+document.body.appendChild(el(`<datalist id="presets">${PRESETS.map(p => `<option value="${esc(p[0])}">`).join('')}</datalist>`));
+
+/* ---------- ajustes ---------- */
+$('#autostart').onchange = e => post('autostart\n' + (e.target.checked ? 1 : 0));
+$('#vanish').onchange = e => { post('vanish\n' + (e.target.checked ? 1 : 0)); toast(e.target.checked ? 'Windows ocultará el puntero al escribir' : 'El puntero ya no se ocultará al escribir'); };
+$('#folder').onclick = () => post('folder');
+const cmdRun = () => { const v = $('#cmd').value.trim(); if (!v) return; $('#cmdOut').textContent = '…'; run(v, { quiet: true, refresh: true, onDone: m => $('#cmdOut').textContent = m.out.trim() || (m.rc ? 'Error' : 'OK') }); };
+$('#cmdRun').onclick = cmdRun;
+$('#cmd').onkeydown = e => { if (e.key === 'Enter') cmdRun(); };
+
+post('state');
+</script>
+</body>
+</html>

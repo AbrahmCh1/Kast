@@ -1,0 +1,7 @@
+# Salida de compilación y datos locales (kast.ini, kast.log y layouts/ del usuario viven en bin/)
+bin/
+*.pdb
+*.lib
+*.obj
+.zig-cache/
+zig-out/
