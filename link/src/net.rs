@@ -4,6 +4,7 @@
 //! de 6 dígitos derivado del intercambio para descartar a alguien en medio.
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::sync::{Arc, Mutex};
 
 const PATTERN: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
 const MAX_PLAIN: usize = 65535 - 16;
@@ -18,9 +19,11 @@ pub mod msg {
     pub const DATA: u8 = 3;
     /// anfitrión -> visor: sólo se movió el cursor (i32 x, i32 y, u8 visible)
     pub const CURSOR: u8 = 4;
-    /// visor -> anfitrión: JSON {"name","platform","monitor"}
+    /// visor -> anfitrión: teclado y ratón (ver input.rs)
+    pub const INPUT: u8 = 20;
+    /// visor -> anfitrión: JSON {"name","platform","monitor","control"}
     pub const REQUEST: u8 = 10;
-    /// anfitrión -> visor: petición aceptada (siguen HELLO y los fotogramas)
+    /// anfitrión -> visor: petición aceptada, JSON {"control": bool, "note": texto} (siguen HELLO y los fotogramas)
     pub const ACCEPT: u8 = 11;
     /// anfitrión -> visor: petición rechazada (texto con el motivo)
     pub const REJECT: u8 = 12;
@@ -60,9 +63,10 @@ fn pairing_code(hash: &[u8]) -> String {
     format!("{:03} {:03}", n / 1000, n % 1000)
 }
 
+/// Canal cifrado. Se puede clonar (	ry_clone) para enviar y recibir desde hilos distintos.
 pub struct Secure {
     stream: TcpStream,
-    noise: snow::TransportState,
+    noise: Arc<Mutex<snow::TransportState>>,
     rbuf: Vec<u8>,
     wbuf: Vec<u8>,
     /// Clave pública del otro equipo.
@@ -89,7 +93,7 @@ impl Secure {
     fn finish(stream: TcpStream, hs: snow::HandshakeState) -> io::Result<Self> {
         let peer = hs.get_remote_static().ok_or_else(|| err("el otro equipo no envió su identidad"))?.to_vec();
         let code = pairing_code(hs.get_handshake_hash());
-        Ok(Self { stream, noise: hs.into_transport_mode().map_err(err)?, rbuf: Vec::new(), wbuf: vec![0u8; 65535], peer, code })
+        Ok(Self { stream, noise: Arc::new(Mutex::new(hs.into_transport_mode().map_err(err)?)), rbuf: Vec::new(), wbuf: vec![0u8; 65535], peer, code })
     }
 
     /// Lado que se conecta (visor).
@@ -127,8 +131,15 @@ impl Secure {
     /// Copia del socket para poder cortar la conexión desde otro hilo.
     pub fn shutdown_handle(&self) -> io::Result<TcpStream> { self.stream.try_clone() }
 
+    /// Otra referencia al mismo canal (para un segundo hilo).
+    pub fn try_clone(&self) -> io::Result<Self> {
+        Ok(Self { stream: self.stream.try_clone()?, noise: self.noise.clone(), rbuf: Vec::new(), wbuf: vec![0u8; 65535], peer: self.peer.clone(), code: self.code.clone() })
+    }
+
     pub fn send(&mut self, plain: &[u8]) -> io::Result<()> {
-        let n = self.noise.write_message(plain, &mut self.wbuf).map_err(err)?;
+        // Cifrar y escribir bajo el mismo cerrojo mantiene el orden de los nonces en el cable.
+        let mut noise = self.noise.lock().unwrap();
+        let n = noise.write_message(plain, &mut self.wbuf).map_err(err)?;
         send_raw(&mut self.stream, &self.wbuf[..n])
     }
 
@@ -155,7 +166,7 @@ impl Secure {
         let mut raw = std::mem::take(&mut self.rbuf);
         let n = recv_raw(&mut self.stream, &mut raw)?;
         out.resize(65535, 0);
-        let r = self.noise.read_message(&raw[..n], out).map_err(err);
+        let r = self.noise.lock().unwrap().read_message(&raw[..n], out).map_err(err);
         self.rbuf = raw;
         let len = r?;
         out.truncate(len);

@@ -9,6 +9,7 @@
 mod agent;
 mod discovery;
 mod h264;
+mod input;
 mod net;
 mod store;
 mod stream;
@@ -141,7 +142,7 @@ fn record(o: &Opts) -> Res<()> {
     let path = o.pos.get(1).ok_or("uso: kast-link record [-m N | --pattern] [--frames 120] <archivo>")?;
     let frames: usize = o.num(&["--frames"], 120);
     let fps: u32 = o.num(&["--fps"], 30);
-    let mut src = platform::Source::new(o.num(&["-m", "--monitor"], 1), fps, o.num(&["--mbps"], 8), o.get(&["--pattern"]).is_some())?;
+    let mut src = platform::Source::new(o.num(&["-m", "--monitor"], 1), fps, o.num(&["--mbps"], 8), o.get(&["--pattern"]).is_some(), true)?;
     let (w, h) = src.size();
     let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
     f.write_all(RECORD_MAGIC)?;

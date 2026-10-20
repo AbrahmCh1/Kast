@@ -4,7 +4,7 @@
   python3 link/tests/e2e.py <ruta a kast-link> [captura.png]
 
 A (puerto 47800) y B (47810, otra identidad) se descubren; A pide ver la pantalla 1 de B, B comprueba el
-código y acepta, A recibe vídeo en vivo; después se desconecta y una segunda petición se rechaza.
+código y acepta con control, A recibe vídeo en vivo; después se desconecta y una segunda petición se rechaza.
 """
 import json, os, queue, subprocess, sys, tempfile, threading, time
 
@@ -57,19 +57,24 @@ try:
     d = next(d for d in st["devices"] if d["id"] == me_b["id"])
     print(f"1) A descubre a B en {d['addr']}")
 
-    A.send(cmd="connect", id=me_b["id"], monitor=1, show_on=0)
+    A.send(cmd="connect", id=me_b["id"], monitor=1, show_on=0, control=True)
     req = B.wait(lambda m: m.get("ev") == "request")
+    assert req.get("control") is True, "la petición no pide control"
     wait = A.wait(state(lambda m: any(s["state"] == "waiting" for s in m["sessions"])))
     code_a = next(s["code"] for s in wait["sessions"] if s["state"] == "waiting")
     assert req["code"] == code_a, f"los códigos no coinciden: {req['code']} / {code_a}"
     print(f"2) B recibe la petición; código {req['code']} igual en ambos lados")
 
-    B.send(cmd="answer", req=req["req"], accept=True, remember=False)
+    B.send(cmd="answer", req=req["req"], accept=True, remember=False, control=True)
     live = A.wait(state(lambda m: any(s["dir"] == "in" and s["state"] == "live" for s in m["sessions"])), 30)
-    sid = next(s["session"] for s in live["sessions"] if s["dir"] == "in")
-    print("3) aceptada: A ve la pantalla de B en vivo")
-    time.sleep(5)
+    s_a = next(s for s in live["sessions"] if s["dir"] == "in")
+    sid = s_a["session"]
+    # Sin permiso de Accesibilidad (Mac de CI) el anfitrión pasa la sesión a solo vista.
+    want = me_b.get("input") is not False
+    assert s_a.get("control") == want, f"control negociado {s_a.get('control')}, esperado {want}"
+    print(f"3) aceptada: A ve la pantalla de B en vivo ({'con control' if want else 'solo vista: B sin permiso de control'})")
     if SHOT:
+        time.sleep(5)
         subprocess.run(["screencapture", "-x", SHOT])
         print(f"   captura en {SHOT}")
 

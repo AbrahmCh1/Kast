@@ -3,10 +3,10 @@
 //!
 //! App -> agente:
 //!   {"cmd":"state"}                                   reenviar el estado completo
-//!   {"cmd":"connect","id":"…","monitor":1,"show_on":0} ver el monitor 1 de un dispositivo (0 = ventana, n = monitor local n)
+//!   {"cmd":"connect","id":"…","monitor":1,"show_on":0,"control":true} ver (y controlar) el monitor 1 de un dispositivo (0 = ventana, n = monitor local n)
 //!   {"cmd":"add","addr":"192.168.1.20"}               agregar un dispositivo por IP
 //!   {"cmd":"forget","id":"…"}                          olvidar un dispositivo (y su confianza)
-//!   {"cmd":"answer","req":3,"accept":true,"remember":true}
+//!   {"cmd":"answer","req":3,"accept":true,"remember":true,"control":true}
 //!   {"cmd":"disconnect","session":5}
 //!   {"cmd":"sharing","enabled":true}                   permitir que otros pidan ver mis pantallas
 //! Agente -> app:
@@ -16,7 +16,7 @@
 use crate::discovery::{self, Beacon, Packet};
 use crate::net::{self, Identity, Secure, id_of, msg};
 use crate::store::{self, Saved};
-use crate::{Res, platform, stream, viewer};
+use crate::{Res, input, platform, stream, viewer};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -47,7 +47,15 @@ struct Req {
     platform: String,
     code: String,
     monitor: usize,
-    answer: Sender<(bool, bool)>,
+    /// Pide también controlar teclado y ratón.
+    control: bool,
+    answer: Sender<Answer>,
+}
+
+struct Answer {
+    accept: bool,
+    remember: bool,
+    control: bool,
 }
 
 struct Sess {
@@ -61,6 +69,8 @@ struct Sess {
     sock: Option<TcpStream>,
     /// Cortada a propósito (ventana cerrada o "Desconectar").
     stopped: bool,
+    /// Con control de teclado y ratón.
+    control: bool,
 }
 
 #[derive(Default)]
@@ -131,10 +141,10 @@ impl Agent {
             .map(|s| json!({"id": format!("ip:{}", s.addr), "name": s.addr, "platform": "", "addr": s.addr, "online": false,
                             "trusted": false, "known": false, "manual": true, "sharing": true, "displays": []}))
             .collect();
-        let requests: Vec<Value> = st.requests.iter().map(|r| json!({"req": r.req, "name": r.name, "platform": r.platform, "code": r.code, "monitor": r.monitor})).collect();
-        let sessions: Vec<Value> = st.sessions.iter().map(|s| json!({"session": s.session, "dir": s.dir, "peer": s.peer, "monitor": s.monitor, "state": s.state, "code": s.code})).collect();
+        let requests: Vec<Value> = st.requests.iter().map(|r| json!({"req": r.req, "name": r.name, "platform": r.platform, "code": r.code, "monitor": r.monitor, "control": r.control})).collect();
+        let sessions: Vec<Value> = st.sessions.iter().map(|s| json!({"session": s.session, "dir": s.dir, "peer": s.peer, "monitor": s.monitor, "state": s.state, "code": s.code, "control": s.control})).collect();
         let me = json!({"id": self.id, "name": self.name, "platform": store::platform(), "port": self.port,
-                        "sharing": self.sharing.load(Ordering::Relaxed), "capture": platform::capture_allowed(),
+                        "sharing": self.sharing.load(Ordering::Relaxed), "capture": platform::capture_allowed(), "input": platform::input_allowed(),
                         "displays": self.displays.lock().unwrap().iter().map(|(w, h)| json!([w, h])).collect::<Vec<_>>()});
         drop(st);
         let all: Vec<Value> = devices.into_iter().chain(pending).collect();
@@ -155,8 +165,9 @@ impl Agent {
             "state" => self.emit_state(),
             "connect" => {
                 let (id, monitor, show_on) = (s("id"), n("monitor").max(1) as usize, n("show_on") as usize);
+                let control = v.get("control").and_then(Value::as_bool).unwrap_or(true);
                 let a = self.clone();
-                std::thread::spawn(move || a.connect(&id, monitor, show_on));
+                std::thread::spawn(move || a.connect(&id, monitor, show_on, control));
             }
             "add" => self.add(&s("addr")),
             "forget" => {
@@ -177,12 +188,16 @@ impl Agent {
                 let mut st = self.st.lock().unwrap();
                 if let Some(i) = st.requests.iter().position(|r| r.req == req) {
                     let r = st.requests.remove(i);
-                    let _ = r.answer.send((b("accept"), b("remember")));
+                    let _ = r.answer.send(Answer { accept: b("accept"), remember: b("remember"), control: b("control") });
                 }
                 drop(st);
                 self.emit_state();
             }
             "disconnect" => self.stop_session(n("session")),
+            "request_input" => {
+                platform::request_input();
+                self.toast("Activa Kast en «Accesibilidad» para que otros puedan controlar este equipo", false);
+            }
             "request_capture" => {
                 platform::request_capture();
                 self.toast("Activa Kast en «Grabación de pantalla» y después cierra y vuelve a abrir Kast", false);
@@ -237,7 +252,7 @@ impl Agent {
 
     // ------------------------------------------------------------ yo veo a otro
 
-    fn connect(self: &Arc<Self>, id: &str, monitor: usize, show_on: usize) {
+    fn connect(self: &Arc<Self>, id: &str, monitor: usize, show_on: usize, control: bool) {
         let (addr, name) = {
             let st = self.st.lock().unwrap();
             if let Some(a) = id.strip_prefix("ip:") {
@@ -248,9 +263,9 @@ impl Agent {
         };
         let Some(addr) = addr else { self.toast(format!("{name} no está disponible"), true); return };
         let session = self.id();
-        self.st.lock().unwrap().sessions.push(Sess { session, dir: "in", peer: name.clone(), monitor, state: "connecting", code: String::new(), sock: None, stopped: false });
+        self.st.lock().unwrap().sessions.push(Sess { session, dir: "in", peer: name.clone(), monitor, state: "connecting", code: String::new(), sock: None, stopped: false, control });
         self.emit_state();
-        let r = self.view(session, id, addr, &name, monitor, show_on);
+        let r = self.view(session, id, addr, &name, monitor, show_on, control);
         let _ = self.proxy.send_event(viewer::Event::Close(session));
         self.end_session(session);
         match r {
@@ -259,7 +274,7 @@ impl Agent {
         }
     }
 
-    fn view(self: &Arc<Self>, session: u64, id: &str, addr: SocketAddr, name: &str, monitor: usize, show_on: usize) -> Res<()> {
+    fn view(self: &Arc<Self>, session: u64, id: &str, addr: SocketAddr, name: &str, monitor: usize, show_on: usize, control: bool) -> Res<()> {
         let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(|_| "no responde")?;
         let mut ch = Secure::connect(stream, &self.me)?;
         let peer_key = net::hex(&ch.peer);
@@ -276,7 +291,7 @@ impl Agent {
         let sock = ch.shutdown_handle()?;
         let code = ch.code.clone();
         self.set_session(session, |s| { s.state = "waiting"; s.code = code; s.sock = Some(sock); });
-        let req = json!({"name": self.name, "platform": store::platform(), "monitor": monitor}).to_string();
+        let req = json!({"name": self.name, "platform": store::platform(), "monitor": monitor, "control": control}).to_string();
         ch.send_typed(msg::REQUEST, req.as_bytes())?;
         let mut m = Vec::new();
         ch.recv(&mut m).map_err(|_| "conexión cerrada")?;
@@ -285,6 +300,13 @@ impl Agent {
             Some(&msg::REJECT) => return Err(String::from_utf8_lossy(&m[1..]).to_string().into()),
             _ => return Err("respuesta inesperada".into()),
         }
+        // ¿Concedió el control? Si no, la sesión es sólo de vista (con el motivo, si lo hay).
+        let granted: Value = serde_json::from_slice(&m[1..]).unwrap_or(Value::Null);
+        let control = control && granted.get("control").and_then(Value::as_bool).unwrap_or(false);
+        if let Some(note) = granted.get("note").and_then(Value::as_str).filter(|n| !n.is_empty()) {
+            self.toast(format!("{name}: {note}"), false);
+        }
+        self.set_session(session, |s| s.control = control);
         // Recordar el dispositivo (su identidad, para detectar cambios).
         {
             let mut st = self.st.lock().unwrap();
@@ -292,7 +314,7 @@ impl Agent {
             let ip = addr.to_string();
             match st.saved.iter_mut().find(|s| s.key == peer_key || (s.key.is_empty() && s.addr == ip)) {
                 Some(s) => { s.key = peer_key.clone(); s.addr = ip; if !dname.is_empty() { s.name = dname; s.platform = plat; } }
-                None => st.saved.push(Saved { key: peer_key, name: dname, platform: plat, addr: ip, trusted: false, manual: false }),
+                None => st.saved.push(Saved { key: peer_key, name: dname, platform: plat, addr: ip, ..Default::default() }),
             }
             self.save(&st);
         }
@@ -304,8 +326,21 @@ impl Agent {
         }
         let (w, h, fps) = stream::parse_hello(&m[1..]).ok_or("respuesta inesperada")?;
         let shared = Arc::new(Mutex::new(viewer::Shared { frame: vec![0; w * h], w, h, cursor: (0, 0, false) }));
-        let title = format!("Kast Link — {name} · pantalla {monitor}");
-        let _ = self.proxy.send_event(viewer::Event::Open { session, shared: shared.clone(), monitor: (show_on > 0).then_some(show_on), title });
+        let title = if control {
+            format!("Kast Link — {name} · pantalla {monitor} · control (Ctrl+Alt+Shift+F pantalla completa, Ctrl+Alt+Shift+Q salir)")
+        } else {
+            format!("Kast Link — {name} · pantalla {monitor}")
+        };
+        // Con control, la ventana envía teclado y ratón por un hilo propio (no bloquea la ventana).
+        let input = if control {
+            let (tx, rx) = channel::<Vec<u8>>();
+            let mut out = ch.try_clone()?;
+            std::thread::spawn(move || { for m in rx { if out.send(&m).is_err() { break; } } });
+            Some(tx)
+        } else {
+            None
+        };
+        let _ = self.proxy.send_event(viewer::Event::Open { session, shared: shared.clone(), monitor: (show_on > 0).then_some(show_on), title, input });
         self.set_session(session, |s| s.state = "live");
         let proxy = self.proxy.clone();
         let r = stream::receive(&mut ch, &shared, w, h, fps, &move || { let _ = proxy.send_event(viewer::Event::Redraw(session)); });
@@ -342,6 +377,7 @@ impl Agent {
         let name: String = v.get("name").and_then(Value::as_str).unwrap_or("Dispositivo").chars().take(64).collect();
         let plat: String = v.get("platform").and_then(Value::as_str).unwrap_or("").chars().take(16).collect();
         let monitor = v.get("monitor").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
+        let wants_control = v.get("control").and_then(Value::as_bool).unwrap_or(false);
         if !self.sharing.load(Ordering::Relaxed) {
             ch.send_typed(msg::REJECT, format!("{} no permite ver sus pantallas", self.name).as_bytes())?;
             return Ok(());
@@ -359,14 +395,15 @@ impl Agent {
             return Ok(());
         }
         let key = net::hex(&ch.peer);
-        let trusted = self.st.lock().unwrap().saved.iter().any(|s| s.key == key && s.trusted);
+        let (trusted, mut control) = self.st.lock().unwrap().saved.iter().find(|s| s.key == key && s.trusted)
+            .map(|s| (true, s.control)).unwrap_or((false, false));
         if !trusted {
             // Hay que aceptar en este equipo: la app se muestra con la petición y el código.
             let req = self.id();
             let (tx, rx) = channel();
             let code = ch.code.clone();
-            self.st.lock().unwrap().requests.push(Req { req, name: name.clone(), platform: plat.clone(), code: code.clone(), monitor, answer: tx });
-            self.emit(json!({"t": "link", "ev": "request", "req": req, "name": name, "code": code, "monitor": monitor}));
+            self.st.lock().unwrap().requests.push(Req { req, name: name.clone(), platform: plat.clone(), code: code.clone(), monitor, control: wants_control, answer: tx });
+            self.emit(json!({"t": "link", "ev": "request", "req": req, "name": name, "code": code, "monitor": monitor, "control": wants_control}));
             self.emit_state();
             let answer = rx.recv_timeout(Duration::from_secs(90));
             {
@@ -374,7 +411,7 @@ impl Agent {
                 st.requests.retain(|r| r.req != req);
             }
             self.emit_state();
-            let Ok((accept, remember)) = answer else {
+            let Ok(Answer { accept, remember, control: allow }) = answer else {
                 let _ = ch.send_typed(msg::REJECT, b"no se respondio a tiempo");
                 return Ok(());
             };
@@ -382,18 +419,27 @@ impl Agent {
                 ch.send_typed(msg::REJECT, format!("{} rechazó la conexión", self.name).as_bytes())?;
                 return Ok(());
             }
+            control = allow;
             if remember {
                 let mut st = self.st.lock().unwrap();
                 let ip = peer_addr.map(|a| a.ip().to_string()).unwrap_or_default();
                 match st.saved.iter_mut().find(|s| s.key == key) {
-                    Some(s) => { s.trusted = true; s.name = name.clone(); s.platform = plat.clone(); }
-                    None => st.saved.push(Saved { key: key.clone(), name: name.clone(), platform: plat.clone(), addr: ip, trusted: true, manual: false }),
+                    Some(s) => { s.trusted = true; s.control = allow; s.name = name.clone(); s.platform = plat.clone(); }
+                    None => st.saved.push(Saved { key: key.clone(), name: name.clone(), platform: plat.clone(), addr: ip, trusted: true, manual: false, control: allow }),
                 }
                 self.save(&st);
             }
         }
+        // Control de teclado y ratón: pedido, concedido y, en macOS, con el permiso de Accesibilidad.
+        let mut note = String::new();
+        let control = wants_control && control && if platform::input_allowed() == Some(false) {
+            note = format!("sólo vista: {} no ha dado a Kast el permiso de Accesibilidad", self.name);
+            self.toast(format!("{name} quiere controlar tu pantalla, pero Kast no tiene permiso de Accesibilidad: pulsa «Dar permiso»"), true);
+            self.emit(json!({"t": "link", "ev": "show"}));
+            false
+        } else { true };
         // La captura se prepara antes de confirmar: si falla, el otro equipo recibe el motivo.
-        let src = match stream::open(monitor, FPS, MBPS) {
+        let src = match stream::open(monitor, FPS, MBPS, !control) {
             Ok(s) => s,
             Err(e) => {
                 store::log(&format!("no se pudo capturar la pantalla {monitor} para {name}: {e}"));
@@ -402,12 +448,30 @@ impl Agent {
                 return Ok(());
             }
         };
-        ch.send_typed(msg::ACCEPT, &[])?;
+        ch.send_typed(msg::ACCEPT, json!({"control": control, "note": note}).to_string().as_bytes())?;
         let session = self.id();
         let sock = ch.shutdown_handle().ok();
-        self.st.lock().unwrap().sessions.push(Sess { session, dir: "out", peer: name.clone(), monitor, state: "live", code: ch.code.clone(), sock, stopped: false });
+        if let Some(s) = &sock { s.set_read_timeout(None)?; }
+        self.st.lock().unwrap().sessions.push(Sess { session, dir: "out", peer: name.clone(), monitor, state: "live", code: ch.code.clone(), sock, stopped: false, control });
         self.emit_state();
-        store::log(&format!("{name} empieza a ver la pantalla {monitor}"));
+        store::log(&format!("{name} empieza a {} la pantalla {monitor}", if control { "controlar" } else { "ver" }));
+        if control {
+            // Teclado y ratón del visor, inyectados en este equipo.
+            let (w, h) = src.size();
+            let mut inj = platform::Injector::new(monitor, w, h)?;
+            let mut rx = ch.try_clone()?;
+            let (viewer, host) = (plat.clone(), store::platform());
+            std::thread::spawn(move || {
+                let mut m = Vec::new();
+                while rx.recv(&mut m).is_ok() {
+                    if m.first() != Some(&msg::INPUT) { continue; }
+                    if let Some(mut e) = input::Event::decode(&m[1..]) {
+                        if let input::Event::Key { code, .. } = &mut e { *code = input::map_modifier(code, &viewer, host); }
+                        inj.apply(e);
+                    }
+                }
+            });
+        }
         let r = stream::serve(&mut ch, src, FPS);
         self.end_session(session);
         store::log(&format!("sesión con {name} terminada{}", r.err().map(|e| format!(": {e}")).unwrap_or_default()));

@@ -79,6 +79,8 @@ pub struct Saved {
     pub trusted: bool,
     /// Agregado a mano (se le pregunta directamente aunque no haya difusión).
     pub manual: bool,
+    /// Además de ver, puede controlar teclado y ratón sin preguntar.
+    pub control: bool,
 }
 
 fn devices_path() -> PathBuf { config_dir().join("link-devices.tsv") }
@@ -90,7 +92,7 @@ pub fn load_devices() -> Vec<Saved> {
             let f: Vec<&str> = l.split('\t').collect();
             (f.len() >= 6).then(|| Saved {
                 key: f[0].into(), name: f[1].into(), platform: f[2].into(), addr: f[3].into(),
-                trusted: f[4] == "1", manual: f[5] == "1",
+                trusted: f[4] == "1", manual: f[5] == "1", control: f.get(6) == Some(&"1"),
             })
         })
         .collect()
@@ -99,7 +101,7 @@ pub fn load_devices() -> Vec<Saved> {
 pub fn save_devices(list: &[Saved]) {
     let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");
     let body: String = list.iter()
-        .map(|d| format!("{}\t{}\t{}\t{}\t{}\t{}\n", d.key, clean(&d.name), d.platform, d.addr, d.trusted as u8, d.manual as u8))
+        .map(|d| format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\n", d.key, clean(&d.name), d.platform, d.addr, d.trusted as u8, d.manual as u8, d.control as u8))
         .collect();
     let _ = std::fs::create_dir_all(config_dir());
     let _ = std::fs::write(devices_path(), body);

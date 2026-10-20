@@ -1,14 +1,16 @@
 //! Ventanas del visor (una por sesión): muestran el último fotograma decodificado, en ventana o a
 //! pantalla completa sobre el monitor elegido (numerados de izquierda a derecha, como en Kast).
-use std::collections::HashMap;
+use crate::input::Event as Input;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::rc::Rc;
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
 pub struct Shared {
@@ -20,7 +22,8 @@ pub struct Shared {
 
 pub enum Event {
     /// Abre la ventana de una sesión. `monitor`: None = ventana, Some(n) = pantalla completa en el monitor n.
-    Open { session: u64, shared: Arc<Mutex<Shared>>, monitor: Option<usize>, title: String },
+    /// `input`: con control, por aquí salen el teclado y el ratón hacia el otro equipo.
+    Open { session: u64, shared: Arc<Mutex<Shared>>, monitor: Option<usize>, title: String, input: Option<Sender<Vec<u8>>> },
     Redraw(u64),
     /// La sesión terminó (por la red o porque se cerró): se cierra su ventana.
     Close(u64),
@@ -31,6 +34,13 @@ struct Win {
     window: Rc<Window>,
     surface: softbuffer::Surface<Rc<Window>, Rc<Window>>,
     shared: Arc<Mutex<Shared>>,
+    input: Option<Sender<Vec<u8>>>,
+    /// Última imagen dibujada: escala y desplazamiento, para traducir el ratón a píxeles remotos.
+    layout: (f64, f64, f64, usize, usize),
+    mods: ModifiersState,
+    keys: HashSet<String>,
+    buttons: [bool; 5],
+    pos: Option<(i32, i32)>,
 }
 
 // Flecha del cursor: '#' borde negro, '.' relleno blanco.
@@ -40,6 +50,74 @@ const ARROW: [&str; 17] = [
 ];
 
 impl Win {
+    fn send(&self, e: Input) {
+        if let Some(tx) = &self.input { let _ = tx.send(e.encode()); }
+    }
+
+    /// Suelta todo lo pulsado (al perder el foco o cerrar) para que nada quede atascado en el otro equipo.
+    fn release_all(&mut self) {
+        for code in std::mem::take(&mut self.keys) { self.send(Input::Key { down: false, code }); }
+        let (x, y) = self.pos.unwrap_or((0, 0));
+        for b in 0..5 {
+            if self.buttons[b] { self.buttons[b] = false; self.send(Input::Button { button: b as u8, down: false, x, y }); }
+        }
+    }
+
+    /// Posición de la ventana -> píxel de la imagen remota (None si cae en las franjas negras).
+    fn to_remote(&self, x: f64, y: f64) -> Option<(i32, i32)> {
+        let (scale, ox, oy, w, h) = self.layout;
+        if scale <= 0.0 { return None; }
+        let (rx, ry) = ((x - ox) / scale, (y - oy) / scale);
+        (rx >= 0.0 && ry >= 0.0 && rx < w as f64 && ry < h as f64).then(|| (rx as i32, ry as i32))
+    }
+
+    /// Eventos de teclado y ratón con control. Devuelve true si la ventana debe cerrarse.
+    fn input_event(&mut self, event: &WindowEvent) -> bool {
+        match event {
+            WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
+            WindowEvent::Focused(false) => self.release_all(),
+            WindowEvent::KeyboardInput { event: KeyEvent { physical_key: PhysicalKey::Code(code), state, .. }, .. } => {
+                let down = *state == ElementState::Pressed;
+                // Atajos locales: Ctrl+Alt+Shift+F pantalla completa, Ctrl+Alt+Shift+Q salir.
+                let local = self.mods.control_key() && self.mods.alt_key() && self.mods.shift_key();
+                if local && down && *code == KeyCode::KeyF {
+                    let full = self.window.fullscreen().is_some();
+                    self.window.set_fullscreen(if full { None } else { Some(Fullscreen::Borderless(self.window.current_monitor())) });
+                    return false;
+                }
+                if local && down && *code == KeyCode::KeyQ { self.release_all(); return true; }
+                let name = format!("{code:?}");
+                if down { self.keys.insert(name.clone()); } else if !self.keys.remove(&name) { return false; }
+                self.send(Input::Key { down, code: name });
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                if let Some(p) = self.to_remote(position.x, position.y) {
+                    if self.pos != Some(p) { self.pos = Some(p); self.send(Input::Move { x: p.0, y: p.1 }); }
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let b = match button {
+                    MouseButton::Left => 0, MouseButton::Right => 1, MouseButton::Middle => 2,
+                    MouseButton::Back => 3, MouseButton::Forward => 4, _ => return false,
+                };
+                let down = *state == ElementState::Pressed;
+                let Some((x, y)) = self.pos else { return false };
+                if !down && !self.buttons[b] { return false; }
+                self.buttons[b] = down;
+                self.send(Input::Button { button: b as u8, down, x, y });
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let (dx, dy) = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => ((x * 120.0) as i32, (y * 120.0) as i32),
+                    MouseScrollDelta::PixelDelta(p) => ((p.x * 3.0) as i32, (p.y * 3.0) as i32),
+                };
+                if dx != 0 || dy != 0 { self.send(Input::Wheel { dx, dy }); }
+            }
+            _ => {}
+        }
+        false
+    }
+
     fn draw(&mut self) {
         let size = self.window.inner_size();
         let (Some(ww), Some(wh)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) else { return };
@@ -54,6 +132,7 @@ impl Win {
             let dw = ((s.w as f64 * scale) as usize).max(1).min(ww);
             let dh = ((s.h as f64 * scale) as usize).max(1).min(wh);
             let (ox, oy) = ((ww - dw) / 2, (wh - dh) / 2);
+            self.layout = (scale, ox as f64, oy as f64, s.w, s.h);
             if dw == s.w && dh == s.h {
                 for y in 0..dh {
                     buf[(oy + y) * ww + ox..(oy + y) * ww + ox + dw].copy_from_slice(&s.frame[y * s.w..(y + 1) * s.w]);
@@ -66,8 +145,9 @@ impl Win {
                     for (d, &sx) in dst.iter_mut().zip(&xmap) { *d = src[sx]; }
                 }
             }
+            // Con control se usa el cursor propio (sin retraso): no se dibuja el remoto.
             let (cx, cy, visible) = s.cursor;
-            if visible {
+            if visible && self.input.is_none() {
                 let bx = ox as f64 + cx as f64 * scale;
                 let by = oy as f64 + cy as f64 * scale;
                 for (ry, row) in ARROW.iter().enumerate() {
@@ -97,7 +177,8 @@ struct App {
 
 impl App {
     fn close(&mut self, el: &ActiveEventLoop, id: WindowId) {
-        if let Some(w) = self.wins.remove(&id) {
+        if let Some(mut w) = self.wins.remove(&id) {
+            w.release_all();
             self.by_session.remove(&w.session);
             (self.on_closed)(w.session);
         }
@@ -109,6 +190,16 @@ impl ApplicationHandler<Event> for App {
     fn resumed(&mut self, _el: &ActiveEventLoop) {}
 
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        // Con control, el teclado y el ratón van al otro equipo (salvo los atajos locales).
+        if let Some(w) = self.wins.get_mut(&id) {
+            if w.input.is_some() {
+                if w.input_event(&event) { return self.close(el, id); }
+                match event {
+                    WindowEvent::KeyboardInput { .. } | WindowEvent::ModifiersChanged(_) => return,
+                    _ => {}
+                }
+            }
+        }
         match event {
             WindowEvent::CloseRequested => self.close(el, id),
             WindowEvent::KeyboardInput { event: KeyEvent { logical_key: Key::Named(NamedKey::Escape), state: ElementState::Pressed, .. }, .. } => self.close(el, id),
@@ -126,7 +217,7 @@ impl ApplicationHandler<Event> for App {
 
     fn user_event(&mut self, el: &ActiveEventLoop, event: Event) {
         match event {
-            Event::Open { session, shared, monitor, title } => {
+            Event::Open { session, shared, monitor, title, input } => {
                 let mut attrs = Window::default_attributes().with_title(&title).with_inner_size(LogicalSize::new(1280.0, 720.0));
                 if let Some(n) = monitor {
                     let mut mons: Vec<_> = el.available_monitors().collect();
@@ -142,7 +233,8 @@ impl ApplicationHandler<Event> for App {
                 window.focus_window();
                 let id = window.id();
                 self.by_session.insert(session, id);
-                self.wins.insert(id, Win { session, window, surface, shared });
+                self.wins.insert(id, Win { session, window, surface, shared, input, layout: (0.0, 0.0, 0.0, 0, 0),
+                                           mods: ModifiersState::empty(), keys: HashSet::new(), buttons: [false; 5], pos: None });
             }
             Event::Redraw(s) => {
                 if let Some(w) = self.by_session.get(&s).and_then(|id| self.wins.get(id)) { w.window.request_redraw(); }

@@ -24,6 +24,9 @@ use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::time::Duration;
 
+mod input;
+pub use input::{Injector, input_allowed, request_input};
+
 pub fn init() {}
 
 const NO_PERMISSION: &str = "Kast no tiene permiso de Grabación de pantalla en este Mac \
@@ -199,7 +202,8 @@ fn shareable_content() -> Res<Retained<SCShareableContent>> {
 }
 
 impl Source {
-    pub fn new(index: usize, fps: u32, mbps: u32, use_pattern: bool) -> Res<Self> {
+    /// show_cursor: dibujar el cursor en la imagen (no si el otro equipo controla con su propio cursor).
+    pub fn new(index: usize, fps: u32, mbps: u32, use_pattern: bool, show_cursor: bool) -> Res<Self> {
         if use_pattern { return Err("--pattern sólo está disponible en Windows".into()); }
         if capture_allowed() == Some(false) { return Err(NO_PERMISSION.into()); }
         let ids = active_displays();
@@ -240,7 +244,7 @@ impl Source {
             config.setHeight(h as usize);
             config.setPixelFormat(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
             config.setMinimumFrameInterval(CMTime::new(1, fps as i32));
-            config.setShowsCursor(true);
+            config.setShowsCursor(show_cursor);
             config.setQueueDepth(5);
             config.setColorMatrix(objc2_core_graphics::kCGDisplayStreamYCbCrMatrix_ITU_R_709_2);
         }

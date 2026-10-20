@@ -334,6 +334,12 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; m
           <div class="sub">Pulsa «Dar permiso», activa Kast en Ajustes del Sistema → Privacidad y seguridad → Grabación de pantalla, y después cierra Kast (barra de menús → Salir de Kast) y vuelve a abrirlo.</div></div>
         <button class="btn primary" id="permBtn">Dar permiso</button>
       </div>
+      <div class="card row req" id="linkInputPerm" hidden style="margin-top:12px">
+        <div class="ic dev-ic"><svg class="i"><use href="#i-key"/></svg></div>
+        <div class="body"><div style="font-weight:600">Para que otros controlen este Mac, Kast necesita el permiso de Accesibilidad</div>
+          <div class="sub">Pulsa «Dar permiso» y activa Kast en Ajustes del Sistema → Privacidad y seguridad → Accesibilidad. Sin él, sólo podrán ver tus pantallas.</div></div>
+        <button class="btn primary" id="inputPermBtn">Dar permiso</button>
+      </div>
       <div id="linkSessionsWrap" hidden><h2>Sesiones activas</h2><div id="linkSessions" class="list"></div></div>
       <h2>Dispositivos</h2>
       <div id="linkDevices" class="grid dev-grid"></div>
@@ -941,14 +947,15 @@ async function askRequest(r) {
   showTab('dispositivos');
   const res = await modal({
     title: 'Petición de conexión', ok: 'Aceptar', cancel: 'Rechazar',
-    body: `<p><b>${esc(r.name)}</b>${r.platform ? ` (${platName(r.platform)})` : ''} quiere ver tu <b>pantalla ${r.monitor}</b>.</p>
+    body: `<p><b>${esc(r.name)}</b>${r.platform ? ` (${platName(r.platform)})` : ''} quiere ${r.control ? 'ver y <b>controlar</b>' : 'ver'} tu <b>pantalla ${r.monitor}</b>.</p>
       <p class="sub">Comprueba que en su pantalla aparece este código:</p><div class="code">${esc(r.code)}</div>
-      <label class="checks"><label><input type="checkbox" id="reqRemember">Recordar este dispositivo (no volver a preguntar)</label></label>`,
+      <div class="checks" style="flex-direction:column;gap:8px">${r.control ? '<label><input type="checkbox" id="reqControl" checked>Permitir que controle el teclado y el ratón</label>' : ''}
+        <label><input type="checkbox" id="reqRemember">Recordar este dispositivo (no volver a preguntar)</label></div>`,
     onOpen: () => {},
   });
   if (res === null) return;   // ya respondida o caducada
   reqShown = null;
-  linkCmd({ cmd: 'answer', req: r.req, accept: !!res, remember: !!res && $('#reqRemember', res)?.checked });
+  linkCmd({ cmd: 'answer', req: r.req, accept: !!res, remember: !!res && $('#reqRemember', res)?.checked, control: !!res && !!$('#reqControl', res)?.checked });
 }
 
 function renderLink() {
@@ -958,13 +965,14 @@ function renderLink() {
   $('#meSub').textContent = `${platName(me.platform)} · ${me.displays.length} pantalla${me.displays.length === 1 ? '' : 's'} · visible en la red`;
   $('#meSharing').checked = me.sharing;
   $('#linkPerm').hidden = !(me.capture === false && me.sharing);
+  $('#linkInputPerm').hidden = !(me.input === false && me.sharing);
   $('#nlink').textContent = L.devices.filter(d => d.online).length || '';
 
   // Peticiones (también en un diálogo)
   $('#linkRequests').innerHTML = '';
   for (const r of L.requests) {
     const c = el(`<div class="card row req" style="margin-bottom:12px"><div class="ic dev-ic">${platIcon(r.platform)}</div>
-      <div class="body"><div style="font-weight:600">${esc(r.name)} quiere ver tu pantalla ${r.monitor}</div>
+      <div class="body"><div style="font-weight:600">${esc(r.name)} quiere ${r.control ? 'ver y controlar' : 'ver'} tu pantalla ${r.monitor}</div>
       <div class="sub">Código de verificación <span class="code sm">${esc(r.code)}</span></div></div>
       <button class="btn" data-a="no">Rechazar</button><button class="btn primary" data-a="yes">Aceptar</button></div>`);
     $('[data-a=no]', c).onclick = () => { if (reqShown === r.req) { reqShown = null; modalDismiss?.(); } linkCmd({ cmd: 'answer', req: r.req, accept: false }); };
@@ -978,9 +986,9 @@ function renderLink() {
   const sb = $('#linkSessions'); sb.innerHTML = '';
   for (const s of sess) {
     const text = s.dir === 'in'
-      ? (s.state === 'live' ? `Viendo la pantalla ${s.monitor} de <b>${esc(s.peer)}</b>` : s.state === 'waiting'
+      ? (s.state === 'live' ? `${s.control ? 'Controlando' : 'Viendo'} la pantalla ${s.monitor} de <b>${esc(s.peer)}</b>` : s.state === 'waiting'
         ? `Esperando que <b>${esc(s.peer)}</b> acepte · código <span class="code sm">${esc(s.code)}</span>` : `Conectando con <b>${esc(s.peer)}</b>…`)
-      : `<b>${esc(s.peer)}</b> está viendo tu pantalla ${s.monitor}`;
+      : `<b>${esc(s.peer)}</b> está ${s.control ? 'controlando' : 'viendo'} tu pantalla ${s.monitor}`;
     const c = el(`<div class="card row"><div class="ic dev-ic">${icon(s.dir === 'in' ? 'mon' : 'link')}</div>
       <div class="body">${text}</div>
       ${s.state === 'live' ? '<span class="status on">En vivo</span>' : '<div class="spin" style="width:16px;height:16px;margin:0;border-width:2px"></div>'}
@@ -998,7 +1006,7 @@ function renderLink() {
   }
   const locals = (S?.mons || []).map(m => `<option value="${m.i}">Pantalla completa en mi monitor ${m.i} · ${esc(m.name)}</option>`).join('');
   for (const d of L.devices) {
-    const sel = linkSel[d.id] || (linkSel[d.id] = { monitor: 1, show: 0 });
+    const sel = linkSel[d.id] || (linkSel[d.id] = { monitor: 1, show: 0, control: true });
     const waiting = L.sessions.find(s => s.dir === 'in' && s.peer === d.name && s.state !== 'live');
     const tags = [platName(d.platform), d.trusted ? 'Puede verme' : '', d.known ? 'Conocido' : '', d.manual ? 'Por IP' : ''].filter(Boolean)
       .map(t => `<span class="tag">${t}</span>`).join(' ');
@@ -1015,6 +1023,7 @@ function renderLink() {
         <label class="field">Ver su<select data-k="monitor">${disp}</select></label>
         <label class="field">Mostrar en<select data-k="show"><option value="0">Una ventana</option>${locals}</select></label>
       </div>
+      <div class="checks"><label><input type="checkbox" data-k="control"${sel.control ? ' checked' : ''}>Controlar teclado y ratón</label></div>
       ${waiting ? `<div class="waiting"><div class="spin"></div><div>${waiting.state === 'waiting'
         ? `Acepta en <b>${esc(d.name)}</b>. Código: <span class="code sm">${esc(waiting.code)}</span>` : 'Conectando…'}</div></div>` : ''}
       <div class="dev-f"><button class="btn primary" data-a="go"${d.online && d.sharing && !waiting ? '' : ' disabled'}>${icon('play')}Conectar</button>
@@ -1024,7 +1033,8 @@ function renderLink() {
     ss.value = String(sel.show);
     ms.onchange = () => sel.monitor = +ms.value;
     ss.onchange = () => sel.show = +ss.value;
-    $('[data-a=go]', c).onclick = () => linkCmd({ cmd: 'connect', id: d.id, monitor: sel.monitor, show_on: sel.show });
+    $('[data-k=control]', c).onchange = e => sel.control = e.target.checked;
+    $('[data-a=go]', c).onclick = () => linkCmd({ cmd: 'connect', id: d.id, monitor: sel.monitor, show_on: sel.show, control: sel.control });
     $('[data-a=forget]', c).onclick = async () => {
       if (await modal({ title: 'Olvidar dispositivo', body: `<p>¿Olvidar <b>${esc(d.name)}</b>? Si podía ver tus pantallas, tendrá que volver a pedir permiso.</p>`, ok: 'Olvidar', danger: true }))
         linkCmd({ cmd: 'forget', id: d.id });
@@ -1034,6 +1044,7 @@ function renderLink() {
 }
 $('#meSharing').onchange = e => linkCmd({ cmd: 'sharing', enabled: e.target.checked });
 $('#permBtn').onclick = () => linkCmd({ cmd: 'request_capture' });
+$('#inputPermBtn').onclick = () => linkCmd({ cmd: 'request_input' });
 $('#devAdd').onclick = async () => {
   const ip = await prompt('Agregar dispositivo', 'Dirección IP del otro equipo (en él: Kast → Dispositivos)', '');
   if (ip) linkCmd({ cmd: 'add', addr: ip });

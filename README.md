@@ -125,15 +125,15 @@ bash mac/build.sh 1.0.0    # genera mac/build/Kast.app (requiere Xcode o Command
 
 # Kast Link (experimental)
 
-Ver la pantalla de otro equipo en uno de tus monitores, por la red local y **cifrado**. Es la primera fase de un sistema para unificar varios equipos (Windows y macOS) y asignar pantallas de uno a otro.
+Ver y **controlar** otro equipo (como AnyDesk) en uno de tus monitores, por la red local y **cifrado**. Es la primera fase de un sistema para unificar varios equipos (Windows y macOS) y asignar pantallas de uno a otro.
 
 **Se usa desde la app:** Kast → **Dispositivos** («Conectar a dispositivo»).
 
 1. Abre Kast en los dos equipos. Se detectan solos en la red local (o usa **Agregar dispositivo** con la IP del otro).
-2. En el que va a ver: elige el dispositivo, **qué pantalla suya** ver y **dónde mostrarla** (una ventana o a pantalla completa en uno de tus monitores) y pulsa **Conectar**.
-3. En el otro equipo, Kast muestra la petición con un **código de 6 dígitos**: comprueba que coincide con el que ves y pulsa **Aceptar**. Con **Recordar este dispositivo** no volverá a preguntar.
+2. En el que va a ver: elige el dispositivo, **qué pantalla suya** ver y **dónde mostrarla** (una ventana o a pantalla completa en uno de tus monitores) y pulsa **Conectar**. Con **Controlar teclado y ratón** (activado por defecto) puedes escribir, hacer clic, arrastrar y desplazarte en el otro equipo.
+3. En el otro equipo, Kast muestra la petición con un **código de 6 dígitos**: comprueba que coincide con el que ves y pulsa **Aceptar**. Puedes permitir el control o dejar que solo vea. Con **Recordar este dispositivo** no volverá a preguntar.
 
-En la ventana del visor, `Esc` la cierra y `F11` alterna pantalla completa. Desde **Dispositivos** se ven las sesiones activas y se pueden cortar, y el interruptor **Permitir que otros vean mis pantallas** desactiva las peticiones entrantes. La primera vez, el sistema pide permisos: en Windows, el del firewall (puertos 47800 TCP y 47801 UDP, redes privadas); en Mac, **Red local** (para encontrar otros equipos) y **Grabación de pantalla** (para compartir).
+En la ventana del visor, `Esc` la cierra y `F11` alterna pantalla completa; al controlar, todas las teclas van al otro equipo, así que se usan `Ctrl+Alt+Shift+F` (pantalla completa) y `Ctrl+Alt+Shift+Q` (cerrar). Entre Windows y Mac, `Ctrl` y `Cmd` se intercambian para que los atajos (copiar, pegar…) funcionen como esperas. Desde **Dispositivos** se ven las sesiones activas y se pueden cortar, y el interruptor **Permitir que otros vean mis pantallas** desactiva las peticiones entrantes. La primera vez, el sistema pide permisos: en Windows, el del firewall (puertos 47800 TCP y 47801 UDP, redes privadas); en Mac, **Red local** (para encontrar otros equipos) y **Grabación de pantalla** (para compartir) y **Accesibilidad** (para que te controlen; Kast → Dispositivos muestra «Dar permiso»). En Windows, las ventanas de administrador y los avisos de UAC no aceptan el control remoto, igual que en otras herramientas sin servicio del sistema.
 
 **Windows y macOS se entienden entre sí**: cualquiera puede compartir y cualquiera puede ver.
 
@@ -153,7 +153,7 @@ En la ventana del visor, `Esc` la cierra y `F11` alterna pantalla completa. Desd
 - **Seguridad:** cada equipo tiene una identidad propia (X25519) y la conexión usa Noise XX (autenticación mutua + ChaCha20-Poly1305). El equipo que comparte siempre decide: acepta o rechaza cada petición, y ambos muestran el mismo código derivado del cifrado para descartar a alguien en medio. Si la identidad de un dispositivo conocido cambia, la conexión se bloquea.
 - **Arquitectura:** la app arranca `kast-link agent`, que se comunica con ella por stdin/stdout (una línea JSON por mensaje), anuncia el equipo por UDP y abre las ventanas del visor.
 - **Todo nativo:** las APIs de captura y vídeo que ya trae cada sistema, sin códecs ni librerías externas. Escrito en Rust.
-- **Hoja de ruta:** control de teclado y ratón con cruce transparente entre monitores, pantallas virtuales (equipos sin monitor) y varias pantallas a la vez.
+- **Hoja de ruta:** cruce transparente del ratón entre monitores de distintos equipos, portapapeles compartido, pantallas virtuales (equipos sin monitor) y varias pantallas a la vez.
 
 Compilar: `build.ps1` lo incluye si tienes Rust (toolchain MSVC, o GNU con las binutils de MinGW-w64). Pruebas: `cargo test --manifest-path link/Cargo.toml` y `python3 link/tests/e2e.py <kast-link>`.
 

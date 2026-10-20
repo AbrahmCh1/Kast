@@ -38,8 +38,8 @@ impl Stats {
 }
 
 /// Prepara la captura del monitor (antes de aceptar la conexión, para poder explicar si falla).
-pub fn open(monitor: usize, fps: u32, mbps: u32) -> Res<platform::Source> {
-    platform::Source::new(monitor, fps, mbps, false)
+pub fn open(monitor: usize, fps: u32, mbps: u32, show_cursor: bool) -> Res<platform::Source> {
+    platform::Source::new(monitor, fps, mbps, false, show_cursor)
 }
 
 /// Anfitrión: transmite el monitor hasta que se corte la conexión.

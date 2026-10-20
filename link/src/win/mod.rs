@@ -1,7 +1,10 @@
 //! Plataforma Windows: captura DXGI + H.264 de Media Foundation.
 mod capture;
 mod color;
+mod input;
 mod mf;
+
+pub use input::Injector;
 
 use crate::{DisplayInfo, Encoded, Res, now_us, pattern};
 use std::time::{Duration, Instant};
@@ -18,6 +21,11 @@ pub fn init() {
 pub fn capture_allowed() -> Option<bool> { None }
 
 pub fn request_capture() {}
+
+/// Tampoco controlar el teclado y el ratón (SendInput).
+pub fn input_allowed() -> Option<bool> { None }
+
+pub fn request_input() {}
 
 pub fn displays() -> Res<Vec<DisplayInfo>> {
     Ok(capture::outputs()?
@@ -43,7 +51,8 @@ pub struct Source {
 }
 
 impl Source {
-    pub fn new(index: usize, fps: u32, mbps: u32, use_pattern: bool) -> Res<Self> {
+    /// show_cursor no aplica: en Windows el cursor viaja aparte y el visor decide si lo dibuja.
+    pub fn new(index: usize, fps: u32, mbps: u32, use_pattern: bool, _show_cursor: bool) -> Res<Self> {
         mf::startup()?;
         let (cap, frame, pitch, w, h) = if use_pattern {
             let (w, h) = (1280usize, 720usize);
