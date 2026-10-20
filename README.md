@@ -2,9 +2,9 @@
 
 <h1 align="center">Kast</h1>
 
-<p align="center">Control de monitores para <b>Windows</b> y <b>macOS</b>: brillo, contraste, entradas, resolución y disposición,<br>desde la bandeja o la barra de menús, con atajos globales y una interfaz moderna.</p>
+<p align="center">Control de monitores para <b>Windows</b> y <b>macOS</b>: brillo, contraste, entradas, resolución y disposición,<br>desde la bandeja o la barra de menús, con atajos globales y una interfaz moderna.<br>Y con <b>Kast Link</b>, ve y controla tus otros equipos en cualquiera de tus monitores, por la red local.</p>
 
-<p align="center"><a href="https://github.com/AbrahmCh1/Kast/releases">Descargar</a> · <a href="#windows">Windows</a> · <a href="#macos">macOS</a></p>
+<p align="center"><a href="https://github.com/AbrahmCh1/Kast/releases">Descargar</a> · <a href="#windows">Windows</a> · <a href="#macos">macOS</a> · <a href="#kast-link">Kast Link</a></p>
 
 <p align="center"><img src="assets/screenshot.png" width="760" alt="Interfaz de Kast"></p>
 
@@ -14,11 +14,12 @@
 - **Calibración por monitor** para que el mismo porcentaje de brillo se vea igual en pantallas distintas.
 - **Resolución, frecuencia, rotación y monitor principal**; activar y desactivar monitores.
 - **Extender y duplicar** sobre todos los monitores conectados (no sólo los que recuerda Windows).
-- **Disposiciones guardadas**: posición, resolución y monitores activos, restaurables con un clic o un atajo.
+- **Disposiciones guardadas**: posición, resolución y monitores activos, restaurables con un clic o un atajo; en Windows también recuerdan qué otros equipos tenías abiertos a pantalla completa y en qué monitor.
 - **Favoritos**: secuencias de comandos (`b all 20; c all 40`) aplicables desde la bandeja o con un atajo.
 - **Atajos globales** configurables, grabados pulsando la combinación.
 - **Cambios seguros**: resolución, rotación, duplicar y disposiciones se revierten solos a los 15 s si no se confirman.
 - **CLI completa** (`kast.exe`) para scripts.
+- **[Kast Link](#kast-link)**: ve y controla otro equipo Windows o Mac en una ventana o a pantalla completa en uno de tus monitores, cifrado y por la red local.
 
 # Windows
 
@@ -28,6 +29,7 @@
 |---|---|
 | `kast.exe` (CLI) | ~125 KB |
 | `kastd.exe` (bandeja + atajos) | ~200 KB; **~250 KB de RAM** en reposo (2-3 MB tras haber abierto la interfaz), 0 % de CPU |
+| `kast-link.exe` (Kast Link) | ~1 MB; sólo usa CPU mientras hay una sesión abierta |
 | Ventana de configuración | WebView2 creado **sólo mientras está abierta**; al cerrarla se liberan sus procesos |
 
 Sin runtime, sin frameworks: Win32 + DXVA2 (DDC/CI) + CCD (`SetDisplayConfig`), compilado con `zig cc`.
@@ -97,7 +99,7 @@ App nativa en Swift que vive en la **barra de menús**: control de brillo por mo
 ## Instalar
 
 1. Descarga `Kast-<versión>-macos.zip` de [Releases](https://github.com/AbrahmCh1/Kast/releases), descomprímelo y mueve **Kast.app** a *Aplicaciones*.
-2. La app no está firmada por Apple: la primera vez, **clic derecho → Abrir** (o `xattr -dr com.apple.quarantine /Applications/Kast.app`).
+2. Ábrela: está **firmada con Developer ID y notarizada por Apple**, así que se abre sin avisos, y los permisos que le des (Grabación de pantalla, Accesibilidad) se conservan al actualizar.
 3. Para usar la CLI desde la terminal:
 
 ```bash
@@ -123,7 +125,9 @@ Los comandos, favoritos, atajos y la calibración son los mismos que en Windows.
 bash mac/build.sh 1.0.0    # genera mac/build/Kast.app (requiere Xcode o Command Line Tools)
 ```
 
-# Kast Link (experimental)
+Sin más, la app se firma *ad hoc*. Para firmarla con tu certificado (Hardened Runtime, lista para notarizar): `KAST_SIGN_ID="Developer ID Application: …" bash mac/build.sh 1.0.0`. La CI de este repositorio firma y notariza cada versión con los secretos `MAC_CERT_P12`, `MAC_CERT_PASSWORD`, `ASC_KEY_P8`, `ASC_KEY_ID` y `ASC_ISSUER_ID`; sin ellos, firma *ad hoc*.
+
+# Kast Link
 
 Ver y **controlar** otro equipo (como AnyDesk) en uno de tus monitores, por la red local y **cifrado**. Es la primera fase de un sistema para unificar varios equipos (Windows y macOS) y asignar pantallas de uno a otro.
 
@@ -133,7 +137,16 @@ Ver y **controlar** otro equipo (como AnyDesk) en uno de tus monitores, por la r
 2. En el que va a ver: elige el dispositivo, **qué pantalla suya** ver y **dónde mostrarla** (una ventana o a pantalla completa en uno de tus monitores) y pulsa **Conectar**. Con **Controlar teclado y ratón** (activado por defecto) puedes escribir, hacer clic, arrastrar y desplazarte en el otro equipo.
 3. En el otro equipo, Kast muestra la petición con un **código de 6 dígitos**: comprueba que coincide con el que ves y pulsa **Aceptar**. Puedes permitir el control o dejar que solo vea. Con **Recordar este dispositivo** no volverá a preguntar.
 
-En la ventana del visor, `Esc` la cierra y `F11` alterna pantalla completa; al controlar, todas las teclas van al otro equipo, así que se usan `Ctrl+Alt+Shift+F` (pantalla completa) y `Ctrl+Alt+Shift+Q` (cerrar). Entre Windows y Mac, `Ctrl` y `Cmd` se intercambian para que los atajos (copiar, pegar…) funcionen como esperas. Desde **Dispositivos** se ven las sesiones activas y se pueden cortar, y el interruptor **Permitir que otros vean mis pantallas** desactiva las peticiones entrantes. La primera vez, el sistema pide permisos: en Windows, el del firewall (puertos 47800 TCP y 47801 UDP, redes privadas); en Mac, **Red local** (para encontrar otros equipos) y **Grabación de pantalla** (para compartir) y **Accesibilidad** (para que te controlen; Kast → Dispositivos muestra «Dar permiso»). En Windows, las ventanas de administrador y los avisos de UAC no aceptan el control remoto, igual que en otras herramientas sin servicio del sistema.
+**En el visor**
+- Sin control: `Esc` cierra la ventana y `F11` alterna pantalla completa.
+- Con control, todas las teclas van al otro equipo, así que se usan `Ctrl+Alt+Shift+F` (pantalla completa) y `Ctrl+Alt+Shift+Q` (cerrar). Al cambiar de ventana se sueltan las teclas pulsadas.
+- Entre Windows y Mac, `Ctrl` y `Cmd` se intercambian para que los atajos (copiar, pegar…) funcionen como esperas.
+
+Desde **Dispositivos** se ven las sesiones activas y se pueden cortar, y el interruptor **Permitir que otros vean mis pantallas** desactiva las peticiones entrantes.
+
+**Permisos** (la primera vez)
+- Windows: el del firewall (puertos 47800 TCP y 47801 UDP, redes privadas). Las ventanas de administrador y los avisos de UAC no aceptan el control remoto, igual que en otras herramientas sin servicio del sistema.
+- Mac: **Red local** (para encontrar otros equipos), **Grabación de pantalla** (para compartir) y **Accesibilidad** (para que te controlen). Si falta alguno, Kast → Dispositivos muestra «Dar permiso».
 
 **En una disposición (Windows):** si guardas una disposición de pantallas mientras tienes otro equipo a pantalla completa en uno de tus monitores, la disposición lo recuerda. Al aplicarla (desde Kast o con su atajo), se restauran los monitores y se vuelve a abrir esa pantalla remota en su monitor, con control si lo tenía. Las sesiones que ya coinciden se mantienen, y las de pantalla completa que no forman parte de la disposición se cierran. Para que no haya que aceptar nada, marca **Recordar este dispositivo** en el otro equipo.
 
@@ -169,11 +182,12 @@ src/webui.c     Windows: ventana WebView2 alojada en C (COM a mano)
 src/ui.html     interfaz compartida por Windows y macOS
 mac/Sources/    macOS: app de la barra de menús en Swift (mismo lenguaje de comandos)
 link/           Kast Link: pantalla remota cifrada por la red local (Rust)
-tools/          generador del icono
+assets/         logo (kast.svg) e iconos generados
+tools/          generador de los iconos (make-icon.ps1)
 third_party/    SDK de WebView2 (licencia BSD de Microsoft)
 ```
 
-Las versiones se publican automáticamente al subir una etiqueta `v*`: GitHub Actions compila ambos sistemas y adjunta los paquetes al Release.
+Las versiones se publican automáticamente al subir una etiqueta `v*`: GitHub Actions compila ambos sistemas, prueba Kast Link de punta a punta, firma y notariza la app de macOS y adjunta los paquetes al Release.
 
 ## Licencia
 

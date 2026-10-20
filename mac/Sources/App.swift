@@ -37,7 +37,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         buildMainMenu()
 
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let img = NSImage(systemSymbolName: "sun.max", accessibilityDescription: "Kast") {
+        // La misma forma que el logo: pantalla con la mitad derecha rellena.
+        if let img = NSImage(systemSymbolName: "rectangle.righthalf.filled", accessibilityDescription: "Kast")
+            ?? NSImage(systemSymbolName: "sun.max", accessibilityDescription: "Kast") {
             img.isTemplate = true
             item.button?.image = img
         }

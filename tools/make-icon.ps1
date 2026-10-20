@@ -1,5 +1,6 @@
-﻿# Genera assets/kast.ico (PNG multi-tamaño) y assets/kast-256.png con System.Drawing.
-# Cada tamaño se dibuja a 4x y se reduce, con una versión simplificada para 16-24 px.
+﻿# Genera assets/kast.ico (PNG multi-tamaño), assets/kast-256.png y assets/kast-1024.png (macOS) con System.Drawing.
+# El diseño es assets/kast.svg: baldosa índigo y una pantalla con la mitad derecha rellena (brillo/contraste).
+# Cada tamaño se dibuja a 4x y se reduce; de 16 a 24 px los trazos son más gruesos.
 Add-Type -AssemblyName System.Drawing
 
 function RoundRect([float]$x, [float]$y, [float]$w, [float]$h, [float]$r) {
@@ -13,62 +14,39 @@ function RoundRect([float]$x, [float]$y, [float]$w, [float]$h, [float]$r) {
     $p
 }
 
-function Draw([int]$size) {
+# $margin: margen de la baldosa en unidades de la rejilla de 64 (macOS usa el de sus iconos: ~6.25).
+function Draw([int]$size, [float]$margin = -1) {
     $S = $size * 4
-    $u = $S / 64.0                       # diseño en una rejilla de 64
     $small = $size -le 24
+    if ($margin -lt 0) { $margin = if ($small) { 1 } else { 3 } }
+    # La baldosa ocupa 64 - 2*margin; el dibujo se escala dentro de ella (diseño en una rejilla de 64 con margen 3).
+    $u = $S / 64.0 * (64 - 2 * $margin) / 58.0
+    $o = $S / 64.0 * $margin - 3 * $u
     $bmp = New-Object Drawing.Bitmap $S, $S
     $g = [Drawing.Graphics]::FromImage($bmp)
     $g.SmoothingMode = 'AntiAlias'
     $g.PixelOffsetMode = 'HighQuality'
+    $g.TranslateTransform($o, $o)
 
-    # baldosa con degradado
-    $m = if ($small) { 1 * $u } else { 3 * $u }
-    $tile = RoundRect $m $m ($S - 2 * $m) ($S - 2 * $m) (14 * $u)
-    $rect = New-Object Drawing.RectangleF 0, 0, $S, $S
-    $grad = New-Object Drawing.Drawing2D.LinearGradientBrush $rect, ([Drawing.Color]::FromArgb(255, 47, 128, 255)), ([Drawing.Color]::FromArgb(255, 142, 84, 247)), 45.0
+    # baldosa
+    $tile = RoundRect (3 * $u) (3 * $u) (58 * $u) (58 * $u) (14 * $u)
+    $rect = New-Object Drawing.RectangleF 0, (3 * $u), $S, (58 * $u)
+    $grad = New-Object Drawing.Drawing2D.LinearGradientBrush $rect, ([Drawing.Color]::FromArgb(255, 90, 102, 255)), ([Drawing.Color]::FromArgb(255, 63, 75, 240)), 90.0
     $g.FillPath($grad, $tile)
-    # brillo superior
-    $g.SetClip($tile)
-    $hi = New-Object Drawing.Drawing2D.LinearGradientBrush $rect, ([Drawing.Color]::FromArgb(70, 255, 255, 255)), ([Drawing.Color]::FromArgb(0, 255, 255, 255)), 90.0
-    $g.FillRectangle($hi, 0, 0, $S, $S * 0.55)
-    $g.ResetClip()
-    if (-not $small) {
-        $edge = New-Object Drawing.Pen ([Drawing.Color]::FromArgb(60, 255, 255, 255)), (1.2 * $u)
-        $g.DrawPath($edge, $tile)
-    }
 
+    # pantalla: contorno, mitad derecha rellena y pie
     $white = [Drawing.Color]::White
-    $sw = if ($small) { 5.5 * $u } else { 4 * $u }
-    $pen = New-Object Drawing.Pen $white, $sw
-    $pen.LineJoin = 'Round'; $pen.StartCap = 'Round'; $pen.EndCap = 'Round'
     $fill = New-Object Drawing.SolidBrush $white
-
-    $cx = 32 * $u
-    if ($small) {
-        # silueta rellena con el símbolo recortado en el color de la baldosa: legible a 16-24 px
-        $mx = 9; $my = 13; $mw = 46; $mh = 30
-        $screen = RoundRect ($mx * $u) ($my * $u) ($mw * $u) ($mh * $u) (5 * $u)
-        $g.FillPath($fill, $screen)
-        $by = ($my + $mh) * $u
-        $g.FillRectangle($fill, $cx - 3.5 * $u, $by, 7 * $u, 6 * $u)
-        $g.FillPath($fill, (RoundRect ($cx - 12 * $u) ($by + 5 * $u) (24 * $u) (6 * $u) (3 * $u)))
-        $r = 9.5 * $u; $cy = ($my + $mh / 2) * $u
-        $ink = New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(255, 92, 104, 250))
-        $g.FillPie($ink, $cx - $r, $cy - $r, $r * 2, $r * 2, 90, 180)
-        $g.DrawEllipse((New-Object Drawing.Pen ([Drawing.Color]::FromArgb(255, 92, 104, 250)), (4 * $u)), $cx - $r, $cy - $r, $r * 2, $r * 2)
-    } else {
-        $mx = 13; $my = 15; $mw = 38; $mh = 26
-        $screen = RoundRect ($mx * $u) ($my * $u) ($mw * $u) ($mh * $u) (5 * $u)
-        $g.DrawPath($pen, $screen)
-        $by = ($my + $mh) * $u
-        $g.DrawLine($pen, $cx, $by, $cx, $by + 6 * $u)
-        $g.DrawLine($pen, $cx - 9 * $u, $by + 7 * $u, $cx + 9 * $u, $by + 7 * $u)
-        # símbolo de brillo/contraste
-        $r = 7.5 * $u; $cy = ($my + $mh / 2) * $u
-        $g.DrawEllipse((New-Object Drawing.Pen $white, (3 * $u)), $cx - $r, $cy - $r, $r * 2, $r * 2)
-        $g.FillPie($fill, $cx - $r, $cy - $r, $r * 2, $r * 2, 90, 180)
-    }
+    if ($small) { $x = 11; $y = 14; $w = 42; $h = 29; $r = 6; $sw = 5.5; $base = 52 }
+    else        { $x = 14; $y = 16; $w = 36; $h = 25; $r = 6; $sw = 4;   $base = 49 }
+    $pen = New-Object Drawing.Pen $white, ($sw * $u)
+    $pen.StartCap = 'Round'; $pen.EndCap = 'Round'; $pen.LineJoin = 'Round'
+    $screen = RoundRect ($x * $u) ($y * $u) ($w * $u) ($h * $u) ($r * $u)
+    $g.SetClip((New-Object Drawing.RectangleF (32 * $u), 0, $S, $S))
+    $g.FillPath($fill, $screen)
+    $g.ResetClip()
+    $g.DrawPath($pen, $screen)
+    $g.DrawLine($pen, (24 * $u), ($base * $u), (40 * $u), ($base * $u))
     $g.Dispose()
 
     $out = New-Object Drawing.Bitmap $size, $size
@@ -101,5 +79,5 @@ $dir = Join-Path $PSScriptRoot '..\assets'
 New-Item -ItemType Directory -Force $dir | Out-Null
 [IO.File]::WriteAllBytes((Join-Path $dir 'kast.ico'), $out.ToArray())
 [IO.File]::WriteAllBytes((Join-Path $dir 'kast-256.png'), $pngs[-1])
-# Icono de macOS (build.sh genera el .icns a partir de éste)
-[IO.File]::WriteAllBytes((Join-Path $dir 'kast-1024.png'), (Draw 1024))
+# Icono de macOS (build.sh genera el .icns a partir de éste), con el margen de la rejilla de iconos de Apple (100/1024).
+[IO.File]::WriteAllBytes((Join-Path $dir 'kast-1024.png'), (Draw 1024 6.25))
