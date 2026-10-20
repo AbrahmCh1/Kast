@@ -19,6 +19,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var sliders: [Int: NSSlider] = [:]
     private var pending: [Int: Int] = [:]
     private let pendingLock = NSLock()
+    // Kast Link: agente en segundo plano (stdin/stdout, una línea JSON por mensaje).
+    private var linkProc: Process?
+    private var linkIn: FileHandle?
+    private var linkBuf = Data()
+    private var linkRestarts = 0
+    private var linkMissing = false
+    private var quitting = false
 
     // MARK: arranque
 
@@ -52,7 +59,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }, nil)
 
         refreshMenuValues()
+        signal(SIGPIPE, SIG_IGN)   // escribir al agente si acaba de terminar no debe cerrar la app
+        linkStart()
         if CommandLine.arguments.contains("--ui") { openUI() }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        quitting = true
+        try? linkIn?.close()   // el agente termina al cerrarse su stdin
+        linkProc?.terminate()
+    }
+
+    // MARK: Kast Link
+
+    private func linkStart() {
+        guard let exe = Bundle.main.url(forAuxiliaryExecutable: "kast-link") else { linkMissing = true; return }
+        let p = Process()
+        p.executableURL = exe
+        p.arguments = ["agent"]
+        let input = Pipe(), output = Pipe()
+        p.standardInput = input
+        p.standardOutput = output
+        p.standardError = FileHandle.nullDevice
+        output.fileHandleForReading.readabilityHandler = { [weak self] h in
+            let data = h.availableData
+            if data.isEmpty { h.readabilityHandler = nil; return }
+            DispatchQueue.main.async { self?.linkData(data) }
+        }
+        p.terminationHandler = { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self = self, !self.quitting else { return }
+                self.linkIn = nil
+                self.linkProc = nil
+                if self.linkRestarts < 5 {
+                    self.linkRestarts += 1
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.linkStart() }
+                }
+            }
+        }
+        do { try p.run() } catch { linkMissing = true; return }
+        linkProc = p
+        linkIn = input.fileHandleForWriting
+        linkMissing = false
+    }
+
+    private func linkData(_ data: Data) {
+        linkBuf.append(data)
+        while let nl = linkBuf.firstIndex(of: 0x0A) {
+            let line = String(data: linkBuf[linkBuf.startIndex..<nl], encoding: .utf8) ?? ""
+            linkBuf.removeSubrange(linkBuf.startIndex...nl)
+            if line.isEmpty { continue }
+            // Alguien pide ver nuestras pantallas: se muestra la ventana para aceptar o rechazar.
+            if line.contains("\"ev\":\"request\"") {
+                openUI()
+                NSApp.requestUserAttention(.criticalRequest)
+            }
+            web?.evaluateJavaScript("window.__kastReceive(\(line))", completionHandler: nil)
+        }
+    }
+
+    private func linkSend(_ json: String) {
+        guard let h = linkIn, let data = (json + "\n").data(using: .utf8) else {
+            send(linkMissing ? ["t": "link", "ev": "missing"]
+                             : ["t": "link", "ev": "toast", "msg": "Kast Link se está reiniciando", "err": true])
+            return
+        }
+        h.write(data)
     }
 
     @objc private func noteUI() { openUI() }
@@ -334,6 +406,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         case "autostart":
             _ = Autostart.set(arg == "1")
             send(["t": "autostart", "autostart": Autostart.enabled])
+        case "link":
+            linkSend(arg)
         case "folder":
             NSWorkspace.shared.open(Paths.support)
         default:

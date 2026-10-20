@@ -102,6 +102,25 @@ h2 { margin: 26px 0 10px; font-size: 14px; font-weight: 600; }
 .quick .slider-row { flex: 1; min-width: 260px; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin-top: 12px; }
+.dev-grid { margin-top: 0; }
+.dev { display: flex; flex-direction: column; gap: 12px; }
+.dev.off { opacity: .62; }
+.dev-h { display: flex; align-items: center; gap: 12px; }
+.dev-h .t { flex: 1; min-width: 0; }
+.dev-h .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dev-ic { width: 38px; height: 38px; border-radius: 9px; display: grid; place-items: center; flex: none; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.dev-ic svg { width: 20px; height: 20px; }
+.status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--sub); white-space: nowrap; }
+.status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.status.on::before { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+.tag { font-size: 11px; padding: 1px 7px; border-radius: 9px; background: var(--card2); border: 1px solid var(--stroke); color: var(--sub); white-space: nowrap; }
+.dev-f { display: flex; gap: 6px; align-items: center; }
+.dev-f .grow { flex: 1; }
+.waiting { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 10%, transparent); font-size: 13px; }
+.waiting .spin { width: 16px; height: 16px; margin: 0; border-width: 2px; flex: none; }
+.code { font: 600 26px/1 "Cascadia Mono", Consolas, ui-monospace, monospace; letter-spacing: 3px; padding: 12px 0; text-align: center; border-radius: 8px; background: var(--card2); border: 1px dashed var(--stroke); }
+.code.sm { display: inline-block; font-size: 15px; padding: 2px 8px; letter-spacing: 1px; }
+.req { border-color: color-mix(in srgb, var(--accent) 55%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent); }
 .mon { display: flex; flex-direction: column; gap: 12px; transition: box-shadow .3s; }
 .mon.flash { box-shadow: 0 0 0 2px var(--accent); }
 .mon-h { display: flex; align-items: center; gap: 12px; }
@@ -224,6 +243,10 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; m
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
   <symbol id="i-term" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M12 15h5"/></symbol>
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-devices" viewBox="0 0 24 24"><rect x="2" y="4" width="14" height="10" rx="1.5"/><path d="M6 18h6M9 14v4"/><rect x="17" y="8" width="5" height="11" rx="1.2"/></symbol>
+  <symbol id="i-win" viewBox="0 0 24 24"><path d="M3 5.5 10.5 4.5v7H3zM12.5 4.2 21 3v8.5h-8.5zM3 12.5h7.5v7L3 18.5zM12.5 12.5H21V21l-8.5-1.2z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-apple" viewBox="0 0 24 24"><path d="M16.4 12.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9-.7 0-1.8-.9-3-.8-1.5 0-3 .9-3.8 2.3-1.6 2.8-.4 7 1.2 9.2.8 1.1 1.7 2.3 2.9 2.3 1.2 0 1.6-.7 3-.7s1.8.7 3 .7c1.3 0 2.1-1.1 2.8-2.2.9-1.3 1.3-2.5 1.3-2.6 0 0-2.5-1-2.5-3.8zM14.1 5.7c.6-.8 1.1-1.9 1-3-1 0-2.1.6-2.8 1.4-.6.7-1.1 1.8-1 2.8 1.1.1 2.2-.5 2.8-1.2z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 18.7l1-1"/></symbol>
 </svg>
 
 <div class="app">
@@ -246,6 +269,7 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; m
     <button class="nav active" data-tab="pantallas"><svg class="i"><use href="#i-mon"/></svg>Pantallas</button>
     <button class="nav" data-tab="favoritos"><svg class="i"><use href="#i-star"/></svg>Favoritos<span class="count" id="nfav"></span></button>
     <button class="nav" data-tab="atajos"><svg class="i"><use href="#i-key"/></svg>Atajos<span class="count" id="nhk"></span></button>
+    <button class="nav" data-tab="dispositivos"><svg class="i"><use href="#i-devices"/></svg>Dispositivos<span class="count" id="nlink"></span></button>
     <button class="nav" data-tab="ajustes"><svg class="i"><use href="#i-gear"/></svg>Ajustes</button>
     <div class="grow"></div>
     <div class="svc"><span class="dot"></span><span id="svc">Servicio activo</span></div>
@@ -290,6 +314,23 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; m
         Ojo: <b>Ctrl + Alt equivale a AltGr</b>; evita combinaciones que uses para escribir (en tu teclado, AltGr + Q es @).</p>
       <div class="list" id="hks"></div>
       <div class="log" id="hkLog" style="margin-top:14px"></div>
+    </section>
+
+    <section id="tab-dispositivos">
+      <div class="head"><h1>Conectar a dispositivo</h1><div class="grow"></div>
+        <button class="btn primary" id="devAdd"><svg class="i"><use href="#i-plus"/></svg>Agregar dispositivo</button></div>
+      <p class="desc">Ve la pantalla de otro equipo con Kast (Windows o Mac) en tu red local. La conexión va cifrada y el otro equipo tiene que aceptarla.</p>
+      <div class="card note" id="linkMissing" hidden>Kast Link no está disponible en esta instalación (falta <span class="mono">kast-link</span> junto a Kast).</div>
+      <div id="linkRequests" class="list"></div>
+      <div class="card row" id="linkMe">
+        <div class="ic dev-ic" id="meIcon"></div>
+        <div class="body"><div style="font-weight:600" id="meName">Este equipo</div><div class="sub" id="meSub">Iniciando Kast Link…</div></div>
+        <div class="sub" style="text-align:right">Permitir que otros<br>vean mis pantallas</div>
+        <label class="switch"><input type="checkbox" id="meSharing"><span></span></label>
+      </div>
+      <div id="linkSessionsWrap" hidden><h2>Sesiones activas</h2><div id="linkSessions" class="list"></div></div>
+      <h2>Dispositivos</h2>
+      <div id="linkDevices" class="grid dev-grid"></div>
     </section>
 
     <section id="tab-ajustes">
@@ -379,10 +420,12 @@ const H = {
   ext: () => { clearTimeout(extTimer); extTimer = setTimeout(() => { if (!busy && !queue.length) post('state'); }, 500); },
   saved: m => { setDirty(false); showLog(m.log); post('state'); toast(m.log.includes('en uso') ? 'Guardado, pero algún atajo está en uso' : 'Guardado', m.log.includes('en uso')); },
   autostart: m => { $('#autostart').checked = m.autostart; toast(m.autostart ? 'Kast se iniciará con Windows' : 'Inicio automático desactivado'); },
+  link: m => onLink(m),
 };
 window.chrome?.webview?.addEventListener('message', e => H[e.data.t]?.(e.data));
 
 /* ---------- utilidades de UI ---------- */
+let modalDismiss = null;
 let toastT;
 function toast(msg, err) {
   const t = $('#toast'); t.innerHTML = `<span class="ti">${err ? '!' : '✓'}</span>${esc(msg)}`; t.className = 'toast show' + (err ? ' err' : '');
@@ -395,11 +438,14 @@ function modal({ title, body = '', ok = 'Aceptar', cancel = 'Cancelar', danger, 
       <div class="foot">${cancel ? `<button class="btn" data-r="0">${esc(cancel)}</button>` : ''}<button class="btn primary${danger ? ' danger' : ''}" data-r="1">${esc(ok)}</button></div></div>`;
     m.classList.remove('hidden');
     let iv;
+    const finish = r => { clearInterval(iv); m.classList.add('hidden'); document.removeEventListener('keydown', key, true); modalDismiss = null; res(r); };
     const close = v => {
       if (capturing) endCapture(null);
       if (v && validate && !validate(m)) return;
-      clearInterval(iv); m.classList.add('hidden'); document.removeEventListener('keydown', key, true); res(v ? (onOpen ? m : true) : false);
+      finish(v ? (onOpen ? m : true) : false);
     };
+    // Cierre desde fuera (p. ej. la petición ya no existe): resuelve con null.
+    modalDismiss = () => finish(null);
     const key = e => {
       if (capturing) return;
       if (e.key === 'Escape') { e.preventDefault(); close(false); }
@@ -863,6 +909,128 @@ $('#hkNew').onclick = async () => {
 };
 document.body.appendChild(el(`<datalist id="presets">${PRESETS.map(p => `<option value="${esc(p[0])}">`).join('')}</datalist>`));
 
+/* ---------- dispositivos (Kast Link) ---------- */
+let L = null;                 // último estado del agente
+const linkSel = {};           // por dispositivo: { monitor, show } elegidos
+let reqShown = null;          // petición cuyo diálogo está abierto
+const linkCmd = o => post('link\n' + JSON.stringify(o));
+const platIcon = p => icon(p === 'mac' ? 'apple' : p === 'windows' ? 'win' : 'devices');
+const platName = p => p === 'mac' ? 'Mac' : p === 'windows' ? 'Windows' : '';
+
+function onLink(m) {
+  if (m.ev === 'missing') { $('#linkMissing').hidden = false; $('#meSub').textContent = 'No disponible'; return; }
+  if (m.ev === 'toast') return toast(m.msg, m.err);
+  if (m.ev === 'request') { showTab('dispositivos'); return; }
+  if (m.ev !== 'state') return;
+  L = m;
+  $('#linkMissing').hidden = true;
+  renderLink();
+  const req = L.requests[0];
+  if (req && reqShown !== req.req) askRequest(req);
+  if (reqShown !== null && !L.requests.some(r => r.req === reqShown)) { reqShown = null; modalDismiss?.(); }
+}
+
+async function askRequest(r) {
+  reqShown = r.req;
+  showTab('dispositivos');
+  const res = await modal({
+    title: 'Petición de conexión', ok: 'Aceptar', cancel: 'Rechazar',
+    body: `<p><b>${esc(r.name)}</b>${r.platform ? ` (${platName(r.platform)})` : ''} quiere ver tu <b>pantalla ${r.monitor}</b>.</p>
+      <p class="sub">Comprueba que en su pantalla aparece este código:</p><div class="code">${esc(r.code)}</div>
+      <label class="checks"><label><input type="checkbox" id="reqRemember">Recordar este dispositivo (no volver a preguntar)</label></label>`,
+    onOpen: () => {},
+  });
+  if (res === null) return;   // ya respondida o caducada
+  reqShown = null;
+  linkCmd({ cmd: 'answer', req: r.req, accept: !!res, remember: !!res && $('#reqRemember', res)?.checked });
+}
+
+function renderLink() {
+  const me = L.me;
+  $('#meIcon').innerHTML = platIcon(me.platform);
+  $('#meName').textContent = me.name;
+  $('#meSub').textContent = `${platName(me.platform)} · ${me.displays.length} pantalla${me.displays.length === 1 ? '' : 's'} · visible en la red`;
+  $('#meSharing').checked = me.sharing;
+  $('#nlink').textContent = L.devices.filter(d => d.online).length || '';
+
+  // Peticiones (también en un diálogo)
+  $('#linkRequests').innerHTML = '';
+  for (const r of L.requests) {
+    const c = el(`<div class="card row req" style="margin-bottom:12px"><div class="ic dev-ic">${platIcon(r.platform)}</div>
+      <div class="body"><div style="font-weight:600">${esc(r.name)} quiere ver tu pantalla ${r.monitor}</div>
+      <div class="sub">Código de verificación <span class="code sm">${esc(r.code)}</span></div></div>
+      <button class="btn" data-a="no">Rechazar</button><button class="btn primary" data-a="yes">Aceptar</button></div>`);
+    $('[data-a=no]', c).onclick = () => { if (reqShown === r.req) { reqShown = null; modalDismiss?.(); } linkCmd({ cmd: 'answer', req: r.req, accept: false }); };
+    $('[data-a=yes]', c).onclick = () => askRequest(r);
+    $('#linkRequests').appendChild(c);
+  }
+
+  // Sesiones
+  const sess = L.sessions.filter(s => s.state !== 'connecting' || s.dir === 'in');
+  $('#linkSessionsWrap').hidden = !sess.length;
+  const sb = $('#linkSessions'); sb.innerHTML = '';
+  for (const s of sess) {
+    const text = s.dir === 'in'
+      ? (s.state === 'live' ? `Viendo la pantalla ${s.monitor} de <b>${esc(s.peer)}</b>` : s.state === 'waiting'
+        ? `Esperando que <b>${esc(s.peer)}</b> acepte · código <span class="code sm">${esc(s.code)}</span>` : `Conectando con <b>${esc(s.peer)}</b>…`)
+      : `<b>${esc(s.peer)}</b> está viendo tu pantalla ${s.monitor}`;
+    const c = el(`<div class="card row"><div class="ic dev-ic">${icon(s.dir === 'in' ? 'mon' : 'link')}</div>
+      <div class="body">${text}</div>
+      ${s.state === 'live' ? '<span class="status on">En vivo</span>' : '<div class="spin" style="width:16px;height:16px;margin:0;border-width:2px"></div>'}
+      <button class="btn">${s.dir === 'in' ? (s.state === 'live' ? 'Desconectar' : 'Cancelar') : 'Detener'}</button></div>`);
+    $('button', c).onclick = () => linkCmd({ cmd: 'disconnect', session: s.session });
+    sb.appendChild(c);
+  }
+
+  // Dispositivos
+  const box = $('#linkDevices'); box.innerHTML = '';
+  if (!L.devices.length) {
+    box.innerHTML = `<div class="card empty" style="grid-column:1/-1">${icon('devices')}<div style="margin-top:8px">Buscando equipos con Kast en tu red…<br>
+      <span class="sub">Abre Kast en el otro equipo. Si no aparece, usa «Agregar dispositivo» con su IP.</span></div></div>`;
+    return;
+  }
+  const locals = (S?.mons || []).map(m => `<option value="${m.i}">Pantalla completa en mi monitor ${m.i} · ${esc(m.name)}</option>`).join('');
+  for (const d of L.devices) {
+    const sel = linkSel[d.id] || (linkSel[d.id] = { monitor: 1, show: 0 });
+    const waiting = L.sessions.find(s => s.dir === 'in' && s.peer === d.name && s.state !== 'live');
+    const tags = [platName(d.platform), d.trusted ? 'Puede verme' : '', d.known ? 'Conocido' : '', d.manual ? 'Por IP' : ''].filter(Boolean)
+      .map(t => `<span class="tag">${t}</span>`).join(' ');
+    const disp = d.displays.length
+      ? d.displays.map((x, i) => `<option value="${i + 1}"${sel.monitor === i + 1 ? ' selected' : ''}>Pantalla ${i + 1} · ${x[0]} × ${x[1]}</option>`).join('')
+      : '<option value="1">Pantalla 1</option>';
+    const c = el(`<div class="card dev${d.online ? '' : ' off'}">
+      <div class="dev-h"><div class="dev-ic">${platIcon(d.platform)}</div>
+        <div class="t"><div class="title">${esc(d.name)}</div><div class="sub">${esc(d.addr || '')}</div></div>
+        <span class="status${d.online ? ' on' : ''}">${d.online ? 'En línea' : 'Sin conexión'}</span></div>
+      <div>${tags}</div>
+      ${d.online && !d.sharing ? '<div class="note">No permite que otros vean sus pantallas.</div>' : ''}
+      <div class="fields">
+        <label class="field">Ver su<select data-k="monitor">${disp}</select></label>
+        <label class="field">Mostrar en<select data-k="show"><option value="0">Una ventana</option>${locals}</select></label>
+      </div>
+      ${waiting ? `<div class="waiting"><div class="spin"></div><div>${waiting.state === 'waiting'
+        ? `Acepta en <b>${esc(d.name)}</b>. Código: <span class="code sm">${esc(waiting.code)}</span>` : 'Conectando…'}</div></div>` : ''}
+      <div class="dev-f"><button class="btn primary" data-a="go"${d.online && d.sharing && !waiting ? '' : ' disabled'}>${icon('play')}Conectar</button>
+        <div class="grow"></div><button class="btn ghost" data-a="forget" title="Olvidar este dispositivo">${icon('trash')}</button></div>
+    </div>`);
+    const [ms, ss] = $$('select', c);
+    ss.value = String(sel.show);
+    ms.onchange = () => sel.monitor = +ms.value;
+    ss.onchange = () => sel.show = +ss.value;
+    $('[data-a=go]', c).onclick = () => linkCmd({ cmd: 'connect', id: d.id, monitor: sel.monitor, show_on: sel.show });
+    $('[data-a=forget]', c).onclick = async () => {
+      if (await modal({ title: 'Olvidar dispositivo', body: `<p>¿Olvidar <b>${esc(d.name)}</b>? Si podía ver tus pantallas, tendrá que volver a pedir permiso.</p>`, ok: 'Olvidar', danger: true }))
+        linkCmd({ cmd: 'forget', id: d.id });
+    };
+    box.appendChild(c);
+  }
+}
+$('#meSharing').onchange = e => linkCmd({ cmd: 'sharing', enabled: e.target.checked });
+$('#devAdd').onclick = async () => {
+  const ip = await prompt('Agregar dispositivo', 'Dirección IP del otro equipo (en él: Kast → Dispositivos)', '');
+  if (ip) linkCmd({ cmd: 'add', addr: ip });
+};
+
 /* ---------- ajustes ---------- */
 $('#autostart').onchange = e => post('autostart\n' + (e.target.checked ? 1 : 0));
 $('#vanish').onchange = e => { post('vanish\n' + (e.target.checked ? 1 : 0)); toast(e.target.checked ? 'Windows ocultará el puntero al escribir' : 'El puntero ya no se ocultará al escribir'); };
@@ -872,6 +1040,7 @@ $('#cmdRun').onclick = cmdRun;
 $('#cmd').onkeydown = e => { if (e.key === 'Enter') cmdRun(); };
 
 post('state');
+linkCmd({ cmd: 'state' });
 </script>
 </body>
 </html>

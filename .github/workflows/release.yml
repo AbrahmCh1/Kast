@@ -37,13 +37,13 @@ jobs:
           if ($reported -ne "kast $version") { throw "versión inesperada: '$reported'" }
           "VERSION=$version" >> $env:GITHUB_ENV
 
-      - name: Compilar Kast Link (experimental)
+      - name: Probar Kast Link
         shell: pwsh
         run: |
-          cargo build --release --locked --manifest-path link/Cargo.toml
+          cargo test --release --locked --manifest-path link/Cargo.toml
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          ./link/target/release/kast-link.exe version
-          ./link/target/release/kast-link.exe play link/testdata/patron-windows.klnk
+          ./bin/kast-link.exe version
+          ./bin/kast-link.exe play link/testdata/patron-windows.klnk
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - name: Empaquetar
@@ -52,7 +52,7 @@ jobs:
           $name = "Kast-$env:VERSION-win-x64"
           $dir = "dist/$name"
           New-Item -ItemType Directory -Force $dir | Out-Null
-          Copy-Item bin/kast.exe, bin/kastd.exe, bin/WebView2Loader.dll, bin/kast.ini, link/target/release/kast-link.exe, LICENSE, README.md $dir
+          Copy-Item bin/kast.exe, bin/kastd.exe, bin/kast-link.exe, bin/WebView2Loader.dll, bin/kast.ini, LICENSE, README.md $dir
           Copy-Item third_party/webview2/LICENSE.txt "$dir/WebView2-LICENSE.txt"
           Compress-Archive -Path "$dir/*" -DestinationPath "dist/$name.zip"
           $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()
@@ -95,18 +95,8 @@ jobs:
           else
             echo "::warning::sin captura de pantalla en el runner (permiso de grabación)"
           fi
-          # En vivo: anfitrión y visor en la misma Mac.
-          KEY="$("$L" key)"
-          "$L" host -m 1 --bind 127.0.0.1 > link-pruebas/host.log 2>&1 &
-          HOST=$!
-          sleep 3
-          "$L" view 127.0.0.1 --key "$KEY" > link-pruebas/view.log 2>&1 &
-          VIEW=$!
-          sleep 10
-          screencapture -x link-pruebas/en-vivo.png || true
-          kill $VIEW $HOST 2>/dev/null || true
-          echo "--- anfitrión"; cat link-pruebas/host.log
-          echo "--- visor"; cat link-pruebas/view.log
+          # De punta a punta con dos agentes: descubrimiento, petición, código, aceptación, vídeo y rechazo.
+          python3 link/tests/e2e.py "$L" link-pruebas/en-vivo.png
 
       - uses: actions/upload-artifact@v4
         if: always()

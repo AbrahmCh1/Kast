@@ -1,12 +1,12 @@
-//! Canal TCP cifrado y autenticado con Noise (NNpsk0: X25519 + ChaCha20-Poly1305 + BLAKE2s).
-//! Sin la clave compartida no se completa el intercambio: nadie más en la red puede ver ni conectarse.
+//! Canal TCP cifrado y autenticado en ambos sentidos con Noise XX
+//! (X25519 + ChaCha20-Poly1305 + BLAKE2s). Cada equipo tiene una identidad (par de claves) propia;
+//! la primera vez, el equipo que comparte debe aceptar al otro, y ambos muestran el mismo código
+//! de 6 dígitos derivado del intercambio para descartar a alguien en medio.
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 
-const PATTERN: &str = "Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s";
+const PATTERN: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
 const MAX_PLAIN: usize = 65535 - 16;
-
-pub type Key = [u8; 32];
 
 /// Mensajes del protocolo (primer byte del texto plano).
 pub mod msg {
@@ -18,24 +18,46 @@ pub mod msg {
     pub const DATA: u8 = 3;
     /// anfitrión -> visor: sólo se movió el cursor (i32 x, i32 y, u8 visible)
     pub const CURSOR: u8 = 4;
+    /// visor -> anfitrión: JSON {"name","platform","monitor"}
+    pub const REQUEST: u8 = 10;
+    /// anfitrión -> visor: petición aceptada (siguen HELLO y los fotogramas)
+    pub const ACCEPT: u8 = 11;
+    /// anfitrión -> visor: petición rechazada (texto con el motivo)
+    pub const REJECT: u8 = 12;
 }
 
 fn err(e: impl std::fmt::Display) -> io::Error { io::Error::other(e.to_string()) }
 
-pub fn parse_key(hex: &str) -> Option<Key> {
-    let hex = hex.trim();
-    if hex.len() != 64 { return None; }
-    let mut k = [0u8; 32];
-    for i in 0..32 { k[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?; }
-    Some(k)
+pub fn hex(b: &[u8]) -> String { b.iter().map(|x| format!("{x:02x}")).collect() }
+
+pub fn unhex(s: &str) -> Option<Vec<u8>> {
+    let s = s.trim();
+    if s.len() % 2 != 0 { return None; }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
 }
 
-pub fn key_hex(k: &Key) -> String { k.iter().map(|b| format!("{b:02x}")).collect() }
+/// Identidad del equipo: par de claves X25519.
+#[derive(Clone)]
+pub struct Identity {
+    pub private: Vec<u8>,
+    pub public: Vec<u8>,
+}
 
-pub fn new_key() -> Key {
-    let mut k = [0u8; 32];
-    getrandom::fill(&mut k).expect("sin fuente de aleatoriedad");
-    k
+impl Identity {
+    pub fn generate() -> Self {
+        let kp = snow::Builder::new(PATTERN.parse().unwrap()).generate_keypair().expect("claves");
+        Self { private: kp.private, public: kp.public }
+    }
+    /// Identificador corto y estable del equipo (prefijo de la clave pública).
+    pub fn id(&self) -> String { id_of(&self.public) }
+}
+
+pub fn id_of(public: &[u8]) -> String { hex(&public[..8.min(public.len())]) }
+
+/// Código de 6 dígitos que ambos lados muestran tras el intercambio.
+fn pairing_code(hash: &[u8]) -> String {
+    let n = u32::from_be_bytes([hash[0], hash[1], hash[2], hash[3]]) % 1_000_000;
+    format!("{:03} {:03}", n / 1000, n % 1000)
 }
 
 pub struct Secure {
@@ -43,6 +65,10 @@ pub struct Secure {
     noise: snow::TransportState,
     rbuf: Vec<u8>,
     wbuf: Vec<u8>,
+    /// Clave pública del otro equipo.
+    pub peer: Vec<u8>,
+    /// Código de verificación de esta conexión.
+    pub code: String,
 }
 
 fn send_raw(s: &mut TcpStream, data: &[u8]) -> io::Result<()> {
@@ -60,38 +86,60 @@ fn recv_raw(s: &mut TcpStream, buf: &mut Vec<u8>) -> io::Result<usize> {
 }
 
 impl Secure {
+    fn finish(stream: TcpStream, hs: snow::HandshakeState) -> io::Result<Self> {
+        let peer = hs.get_remote_static().ok_or_else(|| err("el otro equipo no envió su identidad"))?.to_vec();
+        let code = pairing_code(hs.get_handshake_hash());
+        Ok(Self { stream, noise: hs.into_transport_mode().map_err(err)?, rbuf: Vec::new(), wbuf: vec![0u8; 65535], peer, code })
+    }
+
     /// Lado que se conecta (visor).
-    pub fn connect(mut stream: TcpStream, key: &Key) -> io::Result<Self> {
+    pub fn connect(mut stream: TcpStream, me: &Identity) -> io::Result<Self> {
         stream.set_nodelay(true)?;
-        let mut hs = snow::Builder::new(PATTERN.parse().map_err(err)?).psk(0, key).map_err(err)?.build_initiator().map_err(err)?;
+        let mut hs = snow::Builder::new(PATTERN.parse().map_err(err)?).local_private_key(&me.private).map_err(err)?
+            .build_initiator().map_err(err)?;
         let mut buf = vec![0u8; 65535];
+        let mut msg = Vec::new();
         let n = hs.write_message(&[], &mut buf).map_err(err)?;
         send_raw(&mut stream, &buf[..n])?;
-        let mut msg = Vec::new();
-        let n = recv_raw(&mut stream, &mut msg).map_err(|_| err("el anfitrión rechazó la conexión: ¿clave incorrecta?"))?;
-        hs.read_message(&msg[..n], &mut buf).map_err(|_| err("clave incorrecta o anfitrión no válido"))?;
-        Ok(Self { stream, noise: hs.into_transport_mode().map_err(err)?, rbuf: Vec::new(), wbuf: vec![0u8; 65535] })
+        let n = recv_raw(&mut stream, &mut msg).map_err(|_| err("el equipo no respondió al intercambio cifrado"))?;
+        hs.read_message(&msg[..n], &mut buf).map_err(|_| err("intercambio cifrado inválido"))?;
+        let n = hs.write_message(&[], &mut buf).map_err(err)?;
+        send_raw(&mut stream, &buf[..n])?;
+        Self::finish(stream, hs)
     }
 
     /// Lado que acepta (anfitrión).
-    pub fn accept(mut stream: TcpStream, key: &Key) -> io::Result<Self> {
+    pub fn accept(mut stream: TcpStream, me: &Identity) -> io::Result<Self> {
         stream.set_nodelay(true)?;
-        let mut hs = snow::Builder::new(PATTERN.parse().map_err(err)?).psk(0, key).map_err(err)?.build_responder().map_err(err)?;
+        let mut hs = snow::Builder::new(PATTERN.parse().map_err(err)?).local_private_key(&me.private).map_err(err)?
+            .build_responder().map_err(err)?;
         let mut buf = vec![0u8; 65535];
         let mut msg = Vec::new();
         let n = recv_raw(&mut stream, &mut msg)?;
-        hs.read_message(&msg[..n], &mut buf).map_err(|_| err("clave incorrecta"))?;
+        hs.read_message(&msg[..n], &mut buf).map_err(|_| err("intercambio cifrado inválido"))?;
         let n = hs.write_message(&[], &mut buf).map_err(err)?;
         send_raw(&mut stream, &buf[..n])?;
-        Ok(Self { stream, noise: hs.into_transport_mode().map_err(err)?, rbuf: Vec::new(), wbuf: vec![0u8; 65535] })
+        let n = recv_raw(&mut stream, &mut msg)?;
+        hs.read_message(&msg[..n], &mut buf).map_err(|_| err("intercambio cifrado inválido"))?;
+        Self::finish(stream, hs)
     }
+
+    /// Copia del socket para poder cortar la conexión desde otro hilo.
+    pub fn shutdown_handle(&self) -> io::Result<TcpStream> { self.stream.try_clone() }
 
     pub fn send(&mut self, plain: &[u8]) -> io::Result<()> {
         let n = self.noise.write_message(plain, &mut self.wbuf).map_err(err)?;
         send_raw(&mut self.stream, &self.wbuf[..n])
     }
 
-    /// Envía un tipo de mensaje + datos grandes partidos en trozos DATA.
+    pub fn send_typed(&mut self, kind: u8, body: &[u8]) -> io::Result<()> {
+        let mut m = Vec::with_capacity(body.len() + 1);
+        m.push(kind);
+        m.extend_from_slice(body);
+        self.send(&m)
+    }
+
+    /// Envía datos grandes partidos en trozos DATA.
     pub fn send_chunks(&mut self, data: &[u8]) -> io::Result<()> {
         let mut part = Vec::with_capacity(MAX_PLAIN);
         for chunk in data.chunks(MAX_PLAIN - 1) {

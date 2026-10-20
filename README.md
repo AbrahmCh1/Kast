@@ -127,19 +127,15 @@ bash mac/build.sh 1.0.0    # genera mac/build/Kast.app (requiere Xcode o Command
 
 Ver la pantalla de otro equipo en uno de tus monitores, por la red local y **cifrado**. Es la primera fase de un sistema para unificar varios equipos (Windows y macOS) y asignar pantallas de uno a otro.
 
-```powershell
-# En el equipo que comparte su pantalla:
-kast-link list                     # monitores de este equipo
-kast-link host -m 2                # comparte el monitor 2 y muestra la clave del equipo
+**Se usa desde la app:** Kast → **Dispositivos** («Conectar a dispositivo»).
 
-# En el equipo que la ve:
-kast-link view 192.168.1.20 --key <clave>          # en una ventana
-kast-link view 192.168.1.20 --key <clave> -m 3     # a pantalla completa en el monitor 3
-```
+1. Abre Kast en los dos equipos. Se detectan solos en la red local (o usa **Agregar dispositivo** con la IP del otro).
+2. En el que va a ver: elige el dispositivo, **qué pantalla suya** ver y **dónde mostrarla** (una ventana o a pantalla completa en uno de tus monitores) y pulsa **Conectar**.
+3. En el otro equipo, Kast muestra la petición con un **código de 6 dígitos**: comprueba que coincide con el que ves y pulsa **Aceptar**. Con **Recordar este dispositivo** no volverá a preguntar.
 
-En el visor, `Esc` cierra y `F11` alterna pantalla completa. La primera vez, Windows pedirá permiso en el firewall para el puerto 47800.
+En la ventana del visor, `Esc` la cierra y `F11` alterna pantalla completa. Desde **Dispositivos** se ven las sesiones activas y se pueden cortar, y el interruptor **Permitir que otros vean mis pantallas** desactiva las peticiones entrantes. La primera vez, el sistema pide permisos: en Windows, el del firewall (puertos 47800 TCP y 47801 UDP, redes privadas); en Mac, **Red local** (para encontrar otros equipos) y **Grabación de pantalla** (para compartir).
 
-**Windows y macOS se entienden entre sí**: cualquiera puede compartir y cualquiera puede ver. En Mac, `kast-link` va dentro de la app (`/Applications/Kast.app/Contents/MacOS/kast-link`) y, para compartir, macOS pedirá el permiso de **Grabación de pantalla** para la Terminal.
+**Windows y macOS se entienden entre sí**: cualquiera puede compartir y cualquiera puede ver.
 
 | | Windows | macOS |
 |---|---|---|
@@ -151,14 +147,15 @@ En el visor, `Esc` cierra y `F11` alterna pantalla completa. La primera vez, Win
 |---|---|
 | Captura + codificación H.264 | ~4 ms por fotograma |
 | Decodificación | ~5 ms |
-| Latencia de la captura a la imagen lista | ~5-6 ms (+ red) |
-| Ancho de banda (escritorio) | 2-5 Mbps; hasta `--mbps` con vídeo |
+| Latencia de la captura a la imagen lista | ~5-10 ms (+ red) |
+| Ancho de banda (escritorio) | 2-5 Mbps; hasta 20 Mbps con vídeo |
 
-- **Seguridad:** Noise (X25519 + ChaCha20-Poly1305) con una clave de 256 bits propia de cada equipo (`kast-link key`, `--new` para cambiarla). Sin la clave no se puede ni ver ni conectar.
+- **Seguridad:** cada equipo tiene una identidad propia (X25519) y la conexión usa Noise XX (autenticación mutua + ChaCha20-Poly1305). El equipo que comparte siempre decide: acepta o rechaza cada petición, y ambos muestran el mismo código derivado del cifrado para descartar a alguien en medio. Si la identidad de un dispositivo conocido cambia, la conexión se bloquea.
+- **Arquitectura:** la app arranca `kast-link agent`, que se comunica con ella por stdin/stdout (una línea JSON por mensaje), anuncia el equipo por UDP y abre las ventanas del visor.
 - **Todo nativo:** las APIs de captura y vídeo que ya trae cada sistema, sin códecs ni librerías externas. Escrito en Rust.
-- **Hoja de ruta:** control de teclado y ratón con cruce transparente entre monitores, pantallas virtuales (equipos sin monitor), varias pantallas a la vez y asignación desde la interfaz de Kast.
+- **Hoja de ruta:** control de teclado y ratón con cruce transparente entre monitores, pantallas virtuales (equipos sin monitor) y varias pantallas a la vez.
 
-Compilar: `cargo build --release --manifest-path link/Cargo.toml` (con el toolchain MSVC, o GNU con las binutils de MinGW-w64).
+Compilar: `build.ps1` lo incluye si tienes Rust (toolchain MSVC, o GNU con las binutils de MinGW-w64). Pruebas: `cargo test --manifest-path link/Cargo.toml` y `python3 link/tests/e2e.py <kast-link>`.
 
 ## Estructura
 

@@ -26,6 +26,7 @@
 #define WM_KAST_OPENUI (WM_APP + 2)
 #define WM_KAST_RESULT (WM_APP + 3) /* lParam: char* JSON (malloc) para la UI */
 #define WM_KAST_TRAY   (WM_APP + 4)
+#define WM_KAST_LINK   (WM_APP + 5) /* lParam: char* línea JSON del agente de Kast Link (malloc); NULL = terminó */
 #define MAXHK  128
 #define MAXFAV 64
 

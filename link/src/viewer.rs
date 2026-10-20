@@ -1,5 +1,6 @@
-//! Ventana del visor: muestra el último fotograma decodificado, en ventana o a pantalla completa
-//! sobre el monitor elegido (numerados de izquierda a derecha, como en Kast).
+//! Ventanas del visor (una por sesión): muestran el último fotograma decodificado, en ventana o a
+//! pantalla completa sobre el monitor elegido (numerados de izquierda a derecha, como en Kast).
+use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -18,17 +19,18 @@ pub struct Shared {
 }
 
 pub enum Event {
-    Redraw,
-    Closed(String),
+    /// Abre la ventana de una sesión. `monitor`: None = ventana, Some(n) = pantalla completa en el monitor n.
+    Open { session: u64, shared: Arc<Mutex<Shared>>, monitor: Option<usize>, title: String },
+    Redraw(u64),
+    /// La sesión terminó (por la red o porque se cerró): se cierra su ventana.
+    Close(u64),
 }
 
-struct App {
+struct Win {
+    session: u64,
+    window: Rc<Window>,
+    surface: softbuffer::Surface<Rc<Window>, Rc<Window>>,
     shared: Arc<Mutex<Shared>>,
-    monitor: Option<usize>,
-    title: String,
-    window: Option<Rc<Window>>,
-    surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
-    error: Option<String>,
 }
 
 // Flecha del cursor: '#' borde negro, '.' relleno blanco.
@@ -37,13 +39,12 @@ const ARROW: [&str; 17] = [
     "#.....####", "#..#..#", "#.# #..#", "##  #..#", "#    #..#", "     #..#", "      ##",
 ];
 
-impl App {
+impl Win {
     fn draw(&mut self) {
-        let (Some(win), Some(surface)) = (&self.window, &mut self.surface) else { return };
-        let size = win.inner_size();
+        let size = self.window.inner_size();
         let (Some(ww), Some(wh)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) else { return };
-        if surface.resize(ww, wh).is_err() { return; }
-        let Ok(mut buf) = surface.buffer_mut() else { return };
+        if self.surface.resize(ww, wh).is_err() { return; }
+        let Ok(mut buf) = self.surface.buffer_mut() else { return };
         let (ww, wh) = (size.width as usize, size.height as usize);
         buf.fill(0);
         let s = self.shared.lock().unwrap();
@@ -85,54 +86,90 @@ impl App {
     }
 }
 
-impl ApplicationHandler<Event> for App {
-    fn resumed(&mut self, el: &ActiveEventLoop) {
-        if self.window.is_some() { return; }
-        let mut attrs = Window::default_attributes().with_title(&self.title).with_inner_size(LogicalSize::new(1280.0, 720.0));
-        if let Some(n) = self.monitor {
-            let mut mons: Vec<_> = el.available_monitors().collect();
-            mons.sort_by_key(|m| (m.position().x, m.position().y));
-            match mons.into_iter().nth(n.saturating_sub(1)) {
-                Some(m) => attrs = attrs.with_fullscreen(Some(Fullscreen::Borderless(Some(m)))),
-                None => eprintln!("monitor {n} no existe; se abre en ventana"),
-            }
-        }
-        let win = match el.create_window(attrs) {
-            Ok(w) => Rc::new(w),
-            Err(e) => { self.error = Some(e.to_string()); el.exit(); return; }
-        };
-        let ctx = softbuffer::Context::new(win.clone()).expect("softbuffer");
-        self.surface = Some(softbuffer::Surface::new(&ctx, win.clone()).expect("softbuffer"));
-        self.window = Some(win);
-    }
+struct App {
+    wins: HashMap<WindowId, Win>,
+    by_session: HashMap<u64, WindowId>,
+    /// Se avisa cuando el usuario cierra la ventana de una sesión.
+    on_closed: Box<dyn Fn(u64)>,
+    /// Modo agente: el bucle sigue aunque no haya ventanas.
+    keep_alive: bool,
+}
 
-    fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+impl App {
+    fn close(&mut self, el: &ActiveEventLoop, id: WindowId) {
+        if let Some(w) = self.wins.remove(&id) {
+            self.by_session.remove(&w.session);
+            (self.on_closed)(w.session);
+        }
+        if self.wins.is_empty() && !self.keep_alive { el.exit(); }
+    }
+}
+
+impl ApplicationHandler<Event> for App {
+    fn resumed(&mut self, _el: &ActiveEventLoop) {}
+
+    fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         match event {
-            WindowEvent::CloseRequested => el.exit(),
-            WindowEvent::KeyboardInput { event: KeyEvent { logical_key: Key::Named(NamedKey::Escape), state: ElementState::Pressed, .. }, .. } => el.exit(),
+            WindowEvent::CloseRequested => self.close(el, id),
+            WindowEvent::KeyboardInput { event: KeyEvent { logical_key: Key::Named(NamedKey::Escape), state: ElementState::Pressed, .. }, .. } => self.close(el, id),
             WindowEvent::KeyboardInput { event: KeyEvent { logical_key: Key::Named(NamedKey::F11), state: ElementState::Pressed, .. }, .. } => {
-                if let Some(w) = &self.window {
-                    let full = w.fullscreen().is_some();
-                    w.set_fullscreen(if full { None } else { Some(Fullscreen::Borderless(w.current_monitor())) });
+                if let Some(w) = self.wins.get(&id) {
+                    let full = w.window.fullscreen().is_some();
+                    w.window.set_fullscreen(if full { None } else { Some(Fullscreen::Borderless(w.window.current_monitor())) });
                 }
             }
-            WindowEvent::Resized(_) => { if let Some(w) = &self.window { w.request_redraw(); } }
-            WindowEvent::RedrawRequested => self.draw(),
+            WindowEvent::Resized(_) => { if let Some(w) = self.wins.get(&id) { w.window.request_redraw(); } }
+            WindowEvent::RedrawRequested => { if let Some(w) = self.wins.get_mut(&id) { w.draw(); } }
             _ => {}
         }
     }
 
     fn user_event(&mut self, el: &ActiveEventLoop, event: Event) {
         match event {
-            Event::Redraw => { if let Some(w) = &self.window { w.request_redraw(); } }
-            Event::Closed(msg) => { self.error = Some(msg); el.exit(); }
+            Event::Open { session, shared, monitor, title } => {
+                let mut attrs = Window::default_attributes().with_title(&title).with_inner_size(LogicalSize::new(1280.0, 720.0));
+                if let Some(n) = monitor {
+                    let mut mons: Vec<_> = el.available_monitors().collect();
+                    mons.sort_by_key(|m| (m.position().x, m.position().y));
+                    if let Some(m) = mons.into_iter().nth(n.saturating_sub(1)) {
+                        attrs = attrs.with_fullscreen(Some(Fullscreen::Borderless(Some(m))));
+                    }
+                }
+                let Ok(window) = el.create_window(attrs) else { (self.on_closed)(session); return };
+                let window = Rc::new(window);
+                let Ok(ctx) = softbuffer::Context::new(window.clone()) else { return };
+                let Ok(surface) = softbuffer::Surface::new(&ctx, window.clone()) else { return };
+                window.focus_window();
+                let id = window.id();
+                self.by_session.insert(session, id);
+                self.wins.insert(id, Win { session, window, surface, shared });
+            }
+            Event::Redraw(s) => {
+                if let Some(w) = self.by_session.get(&s).and_then(|id| self.wins.get(id)) { w.window.request_redraw(); }
+            }
+            Event::Close(s) => {
+                if let Some(id) = self.by_session.remove(&s) {
+                    self.wins.remove(&id);
+                    if self.wins.is_empty() && !self.keep_alive { el.exit(); }
+                }
+            }
         }
     }
 }
 
-/// Bucle de la ventana (hilo principal). Devuelve el motivo de cierre si lo hubo.
-pub fn run(el: EventLoop<Event>, shared: Arc<Mutex<Shared>>, monitor: Option<usize>, title: String) -> Option<String> {
-    let mut app = App { shared, monitor, title, window: None, surface: None, error: None };
-    if let Err(e) = el.run_app(&mut app) { return Some(e.to_string()); }
-    app.error
+pub fn event_loop(agent: bool) -> Result<EventLoop<Event>, winit::error::EventLoopError> {
+    let mut b = EventLoop::<Event>::with_user_event();
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+        if agent { b.with_activation_policy(ActivationPolicy::Accessory); }
+    }
+    let _ = agent;
+    b.build()
+}
+
+/// Bucle de ventanas (hilo principal).
+pub fn run(el: EventLoop<Event>, keep_alive: bool, on_closed: impl Fn(u64) + 'static) -> Result<(), winit::error::EventLoopError> {
+    let mut app = App { wins: HashMap::new(), by_session: HashMap::new(), on_closed: Box::new(on_closed), keep_alive };
+    el.run_app(&mut app)
 }

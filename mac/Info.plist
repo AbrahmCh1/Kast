@@ -24,6 +24,8 @@
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Kast busca otros equipos con Kast en tu red local para que puedas ver sus pantallas o compartir las tuyas.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT License · github.com/AbrahmCh1/Kast</string>
 </dict>

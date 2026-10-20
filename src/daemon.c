@@ -48,6 +48,84 @@ static Task *q_pop(void)
     return t;
 }
 
+/* ---------- Kast Link: agente en segundo plano (stdin/stdout, una línea JSON por mensaje) ---------- */
+
+#define TIMER_LINK 1
+static HANDLE link_in, link_proc;
+static int link_missing, link_restarts, quitting;
+
+static DWORD WINAPI link_reader(LPVOID arg)
+{
+    HANDLE out = arg;
+    char buf[4096];
+    Sb line = { 0 };
+    DWORD n;
+    while (ReadFile(out, buf, sizeof buf, &n, NULL) && n) {
+        for (DWORD i = 0; i < n; i++) {
+            if (buf[i] == '\n') {
+                if (line.n) {
+                    char *l = _strdup(line.p);
+                    if (!PostMessageA(g_hwnd, WM_KAST_LINK, 0, (LPARAM)l)) free(l);
+                }
+                line.n = 0;
+                line.p[0] = 0;
+            } else if (buf[i] != '\r') {
+                sb_add(&line, &buf[i], 1);
+            }
+        }
+    }
+    CloseHandle(out);
+    free(line.p);
+    PostMessageA(g_hwnd, WM_KAST_LINK, 0, 0);
+    return 0;
+}
+
+static void link_start(void)
+{
+    char exe[MAX_PATH], cmd[MAX_PATH + 16];
+    snprintf(exe, sizeof exe, "%s\\kast-link.exe", exedir);
+    if (GetFileAttributesA(exe) == INVALID_FILE_ATTRIBUTES) { link_missing = 1; return; }
+    SECURITY_ATTRIBUTES sa = { sizeof sa, NULL, TRUE };
+    HANDLE in_r, in_w, out_r, out_w;
+    if (!CreatePipe(&in_r, &in_w, &sa, 0)) return;
+    if (!CreatePipe(&out_r, &out_w, &sa, 0)) { CloseHandle(in_r); CloseHandle(in_w); return; }
+    SetHandleInformation(in_w, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0);
+    HANDLE nul = CreateFileA("NUL", GENERIC_WRITE, FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
+    STARTUPINFOA si = { .cb = sizeof si, .dwFlags = STARTF_USESTDHANDLES, .hStdInput = in_r, .hStdOutput = out_w, .hStdError = nul };
+    PROCESS_INFORMATION pi;
+    snprintf(cmd, sizeof cmd, "\"%s\" agent", exe);
+    BOOL ok = CreateProcessA(exe, cmd, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, exedir, &si, &pi);
+    CloseHandle(in_r);
+    CloseHandle(out_w);
+    CloseHandle(nul);
+    if (!ok) { CloseHandle(in_w); CloseHandle(out_r); link_missing = 1; return; }
+    CloseHandle(pi.hThread);
+    link_proc = pi.hProcess;
+    link_in = in_w;
+    link_missing = 0;
+    CloseHandle(CreateThread(NULL, 64 * 1024, link_reader, out_r, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL));
+}
+
+static void link_send(const char *json)
+{
+    DWORD w;
+    if (!link_in) return;
+    WriteFile(link_in, json, (DWORD)strlen(json), &w, NULL);
+    WriteFile(link_in, "\n", 1, &w, NULL);
+}
+
+/* Cerrar su stdin hace que el agente termine. */
+static void link_stop(void)
+{
+    if (link_in) { CloseHandle(link_in); link_in = NULL; }
+    if (link_proc) {
+        if (WaitForSingleObject(link_proc, 2000) == WAIT_TIMEOUT) TerminateProcess(link_proc, 0);
+        CloseHandle(link_proc);
+        link_proc = NULL;
+    }
+}
+
 static void post_ui(char *json)
 {
     if (!PostMessageA(g_hwnd, WM_KAST_RESULT, 0, (LPARAM)json)) free(json);
@@ -166,6 +244,10 @@ void on_ui_message(const wchar_t *w)
         /* Opción de Windows "Ocultar el puntero mientras se escribe" */
         SystemParametersInfoW(SPI_SETMOUSEVANISH, 0, (PVOID)(UINT_PTR)(*arg == '1'), SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
         q_push(T_STATE, NULL);
+    } else if (!strcmp(s, "link")) {
+        if (link_in) link_send(arg);
+        else if (link_missing) ui_post_json("{\"t\":\"link\",\"ev\":\"missing\"}");
+        else ui_post_json("{\"t\":\"link\",\"ev\":\"toast\",\"msg\":\"Kast Link se está reiniciando\",\"err\":true}");
     } else if (!strcmp(s, "folder")) {
         ShellExecuteA(NULL, "open", exedir, NULL, NULL, SW_SHOWNORMAL);
     }
@@ -284,12 +366,30 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         free((void *)lp);
         return 0;
     case WM_KAST_RELOAD: reload_config(); return 0;
+    case WM_KAST_LINK:
+        if (!lp) {
+            /* El agente terminó: se reintenta unas veces (por si falló al arrancar). */
+            if (link_in) { CloseHandle(link_in); link_in = NULL; }
+            if (link_proc) { CloseHandle(link_proc); link_proc = NULL; }
+            if (!quitting && link_restarts++ < 5) SetTimer(h, TIMER_LINK, 3000, NULL);
+            return 0;
+        }
+        /* Alguien pide ver nuestras pantallas: se muestra la ventana para aceptar o rechazar. */
+        if (strstr((char *)lp, "\"ev\":\"request\"")) ui_open();
+        ui_post_json((const char *)lp);
+        free((void *)lp);
+        return 0;
+    case WM_TIMER:
+        if (wp == TIMER_LINK) { KillTimer(h, TIMER_LINK); link_start(); }
+        return 0;
     case WM_DISPLAYCHANGE:
         cache_clear();
         if (ui_is_open()) q_push(T_STATE, NULL);
         break;
     case WM_CLOSE:
+        quitting = 1;
         ui_close();
+        link_stop();
         DestroyWindow(h);
         return 0;
     case WM_DESTROY:
@@ -325,6 +425,7 @@ int main(int argc, char **argv)
 
     reload_config();
     tray_add();
+    link_start();
     CloseHandle(CreateThread(NULL, 256 * 1024, worker, NULL, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL));
     if (argc > 1 && !strcmp(argv[1], "--ui")) ui_open();
     trim_ws();
