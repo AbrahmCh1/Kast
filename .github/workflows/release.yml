@@ -105,6 +105,29 @@ jobs:
           path: link-pruebas/
           if-no-files-found: ignore
 
+      # Firma con Developer ID si el repositorio tiene los secretos (si no, firma ad hoc).
+      - name: Certificado de firma
+        env:
+          MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+        run: |
+          if [ -z "$MAC_CERT_P12" ]; then echo "::notice::sin certificado: firma ad hoc"; exit 0; fi
+          KC="$RUNNER_TEMP/firma.keychain-db"
+          KC_PW="$(uuidgen)"
+          security create-keychain -p "$KC_PW" "$KC"
+          security set-keychain-settings -lut 3600 "$KC"
+          security unlock-keychain -p "$KC_PW" "$KC"
+          printf '%s' "$MAC_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$MAC_CERT_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PW" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          ID="$(security find-identity -v -p codesigning "$KC" | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)"
+          test -n "$ID" || { echo "::error::el .p12 no contiene un certificado Developer ID Application"; exit 1; }
+          echo "Firmando como: $ID"
+          echo "KAST_SIGN_ID=$ID" >> "$GITHUB_ENV"
+          echo "KAST_KEYCHAIN=$KC" >> "$GITHUB_ENV"
+
       - name: Compilar
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then V="${GITHUB_REF_NAME#v}"; else V="dev-${GITHUB_SHA::7}"; fi
@@ -112,8 +135,32 @@ jobs:
           BIN=mac/build/Kast.app/Contents/MacOS/Kast
           test "$("$BIN" version)" = "kast $V"
           lipo -archs "$BIN"
-          codesign --verify --verbose mac/build/Kast.app
+          codesign --verify --strict --verbose mac/build/Kast.app
           echo "VERSION=$V" >> "$GITHUB_ENV"
+
+      - name: Notarizar
+        if: env.KAST_SIGN_ID != ''
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          if [ -z "$ASC_KEY_P8" ]; then echo "::warning::firmada pero sin notarizar: faltan los secretos ASC_*"; exit 0; fi
+          KEY="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s\n' "$ASC_KEY_P8" > "$KEY"
+          ditto -c -k --keepParent mac/build/Kast.app "$RUNNER_TEMP/notarizar.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarizar.zip" --key "$KEY" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+            --wait --timeout 30m --output-format json | tee "$RUNNER_TEMP/notary.json"
+          rm -f "$KEY"
+          if ! grep -q '"status" *: *"Accepted"' "$RUNNER_TEMP/notary.json"; then
+            SUB="$(sed -n 's/.*"id" *: *"\([^"]*\)".*/\1/p' "$RUNNER_TEMP/notary.json" | head -1)"
+            printf '%s\n' "$ASC_KEY_P8" > "$KEY"
+            [ -n "$SUB" ] && xcrun notarytool log "$SUB" --key "$KEY" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
+            rm -f "$KEY"
+            echo "::error::Apple rechazó la notarización"; exit 1
+          fi
+          xcrun stapler staple mac/build/Kast.app
+          spctl --assess --type execute -vv mac/build/Kast.app
 
       - name: Prueba de humo
         run: |
@@ -146,6 +193,8 @@ jobs:
 
       - name: Empaquetar
         run: |
+          # La prueba de humo no puede haber tocado el paquete firmado.
+          codesign --verify --strict --verbose mac/build/Kast.app
           NAME="Kast-$VERSION-macos"
           mkdir -p dist
           ditto -c -k --keepParent mac/build/Kast.app "dist/$NAME.zip"
@@ -158,6 +207,10 @@ jobs:
           path: |
             dist/${{ env.PKG }}.zip
             dist/${{ env.PKG }}.zip.sha256
+
+      - name: Borrar el llavero temporal
+        if: always() && env.KAST_KEYCHAIN != ''
+        run: security delete-keychain "$KAST_KEYCHAIN" || true
 
   release:
     if: github.ref_type == 'tag'

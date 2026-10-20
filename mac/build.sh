@@ -37,6 +37,16 @@ for s in 16 32 128 256 512; do
 done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Kast.icns"
 
-# Firma ad-hoc (sin cuenta de desarrollador de Apple): necesaria para arm64.
-codesign --force --deep --sign - "$APP"
+# Firma: con KAST_SIGN_ID ("Developer ID Application: …", en el llavero) se firma con Hardened Runtime,
+# lista para notarizar y con permisos (Accesibilidad, Grabación de pantalla) que se conservan al actualizar.
+# Sin ella, firma ad hoc (necesaria para arm64).
+if [ -n "${KAST_SIGN_ID:-}" ]; then
+  # De dentro hacia fuera: primero el agente de Kast Link, después la app.
+  if [ -f "$APP/Contents/MacOS/kast-link" ]; then
+    codesign --force --options runtime --timestamp --sign "$KAST_SIGN_ID" "$APP/Contents/MacOS/kast-link"
+  fi
+  codesign --force --options runtime --timestamp --sign "$KAST_SIGN_ID" "$APP"
+else
+  codesign --force --deep --sign - "$APP"
+fi
 echo "OK: $APP ($VERSION)"
