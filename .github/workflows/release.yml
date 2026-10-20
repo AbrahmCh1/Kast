@@ -37,13 +37,20 @@ jobs:
           if ($reported -ne "kast $version") { throw "versión inesperada: '$reported'" }
           "VERSION=$version" >> $env:GITHUB_ENV
 
+      - name: Compilar Kast Link (experimental)
+        shell: pwsh
+        run: |
+          cargo build --release --locked --manifest-path link/Cargo.toml
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./link/target/release/kast-link.exe version
+
       - name: Empaquetar
         shell: pwsh
         run: |
           $name = "Kast-$env:VERSION-win-x64"
           $dir = "dist/$name"
           New-Item -ItemType Directory -Force $dir | Out-Null
-          Copy-Item bin/kast.exe, bin/kastd.exe, bin/WebView2Loader.dll, bin/kast.ini, LICENSE, README.md $dir
+          Copy-Item bin/kast.exe, bin/kastd.exe, bin/WebView2Loader.dll, bin/kast.ini, link/target/release/kast-link.exe, LICENSE, README.md $dir
           Copy-Item third_party/webview2/LICENSE.txt "$dir/WebView2-LICENSE.txt"
           Compress-Archive -Path "$dir/*" -DestinationPath "dist/$name.zip"
           $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()

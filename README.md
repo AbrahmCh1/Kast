@@ -123,6 +123,35 @@ Los comandos, favoritos, atajos y la calibración son los mismos que en Windows.
 bash mac/build.sh 1.0.0    # genera mac/build/Kast.app (requiere Xcode o Command Line Tools)
 ```
 
+# Kast Link (experimental)
+
+Ver la pantalla de otro equipo en uno de tus monitores, por la red local y **cifrado**. Es la primera fase de un sistema para unificar varios equipos (Windows y macOS) y asignar pantallas de uno a otro.
+
+```powershell
+# En el equipo que comparte su pantalla:
+kast-link list                     # monitores de este equipo
+kast-link host -m 2                # comparte el monitor 2 y muestra la clave del equipo
+
+# En el equipo que la ve:
+kast-link view 192.168.1.20 --key <clave>          # en una ventana
+kast-link view 192.168.1.20 --key <clave> -m 3     # a pantalla completa en el monitor 3
+```
+
+En el visor, `Esc` cierra y `F11` alterna pantalla completa. La primera vez, Windows pedirá permiso en el firewall para el puerto 47800.
+
+| Medido en red local (1080p, 60 fps) | |
+|---|---|
+| Captura + codificación H.264 | ~4 ms por fotograma |
+| Decodificación | ~5 ms |
+| Latencia de la captura a la imagen lista | ~5-6 ms (+ red) |
+| Ancho de banda (escritorio) | 2-5 Mbps; hasta `--mbps` con vídeo |
+
+- **Seguridad:** Noise (X25519 + ChaCha20-Poly1305) con una clave de 256 bits propia de cada equipo (`kast-link key`, `--new` para cambiarla). Sin la clave no se puede ni ver ni conectar.
+- **Todo nativo:** captura DXGI y H.264 de Media Foundation (incluidos en Windows), sin códecs ni librerías externas. Escrito en Rust.
+- **Hoja de ruta:** control de teclado y ratón con cruce transparente entre monitores, pantallas virtuales (equipos sin monitor), anfitrión en macOS (ScreenCaptureKit + VideoToolbox), varias pantallas a la vez y asignación desde la interfaz de Kast.
+
+Compilar: `cargo build --release --manifest-path link/Cargo.toml` (con el toolchain MSVC, o GNU con las binutils de MinGW-w64).
+
 ## Estructura
 
 ```
@@ -132,6 +161,7 @@ src/daemon.c    Windows: kastd.exe (bandeja, atajos y cola de trabajo)
 src/webui.c     Windows: ventana WebView2 alojada en C (COM a mano)
 src/ui.html     interfaz compartida por Windows y macOS
 mac/Sources/    macOS: app de la barra de menús en Swift (mismo lenguaje de comandos)
+link/           Kast Link: pantalla remota cifrada por la red local (Rust)
 tools/          generador del icono
 third_party/    SDK de WebView2 (licencia BSD de Microsoft)
 ```

@@ -1,0 +1,29 @@
+[package]
+name = "kast-link"
+version = "0.1.0"
+edition = "2024"
+description = "Ver la pantalla de otro equipo por la red local, cifrado (parte de Kast)"
+license = "MIT"
+repository = "https://github.com/AbrahmCh1/Kast"
+
+[dependencies]
+getrandom = "0.4.3"
+# Sólo lo que usa Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s, en Rust puro (sin ring ni compilador de C).
+# Sin la feature "std": en snow 0.10 activa "ring/std" y con ello ring (que necesita compilador de C).
+snow = { version = "0.10.0", default-features = false, features = ["default-resolver", "use-curve25519", "use-chacha20poly1305", "use-blake2", "use-getrandom"] }
+softbuffer = "0.4.8"
+winit = "0.30.13"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11", "Win32_Graphics_Gdi", "Win32_Media_MediaFoundation", "Win32_System_Com",
+    "Win32_System_Variant", "Win32_System_Ole", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_System_Console",
+] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
