@@ -189,6 +189,7 @@ kbd { display: inline-block; min-width: 24px; padding: 1px 7px; border-radius: 4
 .switch span::after { content: ""; position: absolute; left: 3px; top: 3px; width: 12px; height: 12px; border-radius: 50%; background: var(--sub); transition: .15s; }
 .switch input:checked + span { background: var(--accent); border-color: var(--accent); }
 .switch input:checked + span::after { left: 23px; background: var(--on-accent); }
+[hidden] { display: none !important; }
 .row { display: flex; align-items: center; gap: 16px; }
 .row .body { flex: 1; }
 pre.help { margin: 0; white-space: pre-wrap; user-select: text; max-height: 340px; overflow: auto; }
