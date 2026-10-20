@@ -38,6 +38,8 @@ struct Dev {
     name: String,
     platform: String,
     addr: Option<SocketAddr>,
+    /// Otras direcciones desde las que llegó su anuncio (varias interfaces): se prueban si `addr` no responde.
+    alts: Vec<SocketAddr>,
     seen: Option<Instant>,
     displays: Vec<(u32, u32)>,
     sharing: bool,
@@ -332,20 +334,27 @@ impl Agent {
     // ------------------------------------------------------------ yo veo a otro
 
     fn connect(self: &Arc<Self>, id: &str, monitor: usize, show_on: usize, control: bool) {
-        let (addr, name) = {
+        let (addrs, name) = {
             let st = self.st.lock().unwrap();
             if let Some(a) = id.strip_prefix("ip:") {
-                (a.parse::<SocketAddr>().ok(), a.to_string())
+                (a.parse::<SocketAddr>().ok().into_iter().collect::<Vec<_>>(), a.to_string())
             } else {
-                match st.devices.get(id) { Some(d) => (d.addr, d.name.clone()), None => (None, id.to_string()) }
+                match st.devices.get(id) {
+                    Some(d) => {
+                        let mut v: Vec<SocketAddr> = d.addr.into_iter().collect();
+                        v.extend(d.alts.iter().filter(|a| Some(**a) != d.addr));
+                        (v, d.name.clone())
+                    }
+                    None => (vec![], id.to_string()),
+                }
             }
         };
-        let Some(addr) = addr else { self.toast(format!("{name} no está disponible"), true); return };
+        if addrs.is_empty() { self.toast(format!("{name} no está disponible"), true); return }
         let session = self.id();
         self.st.lock().unwrap().sessions.push(Sess { session, dir: "in", peer: name.clone(), monitor, state: "connecting", code: String::new(), sock: None,
                                                      stopped: false, control, dev: id.to_string(), show_on, want_control: control });
         self.emit_state();
-        let r = self.view(session, id, addr, &name, monitor, show_on, control);
+        let r = self.view(session, id, &addrs, &name, monitor, show_on, control);
         let _ = self.proxy.send_event(viewer::Event::Close(session));
         self.end_session(session);
         match r {
@@ -354,8 +363,15 @@ impl Agent {
         }
     }
 
-    fn view(self: &Arc<Self>, session: u64, id: &str, addr: SocketAddr, name: &str, monitor: usize, show_on: usize, control: bool) -> Res<()> {
-        let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(|_| "no responde")?;
+    fn view(self: &Arc<Self>, session: u64, id: &str, addrs: &[SocketAddr], name: &str, monitor: usize, show_on: usize, control: bool) -> Res<()> {
+        // La dirección conocida primero; si no responde, las demás desde las que se anunció.
+        let (stream, addr) = addrs.iter().enumerate()
+            .find_map(|(i, a)| TcpStream::connect_timeout(a, Duration::from_secs(if i == 0 { 4 } else { 2 })).ok().map(|s| (s, *a)))
+            .ok_or("no responde")?;
+        if addr != addrs[0] {
+            store::log(&format!("{name}: {} no responde, conectado por {addr}", addrs[0]));
+            if let Some(d) = self.st.lock().unwrap().devices.get_mut(id) { d.addr = Some(addr); }
+        }
         let mut ch = Secure::connect(stream, &self.me)?;
         let peer_key = net::hex(&ch.peer);
         let peer_id = id_of(&ch.peer);
@@ -626,11 +642,16 @@ impl Agent {
                 if seen.elapsed() < ONLINE && prev.port() == b.port { addr = prev; }
             }
         }
+        let here = SocketAddr::new(ip, b.port);
+        let mut alts = st.devices.get(&b.id).map(|d| d.alts.clone()).unwrap_or_default();
+        alts.retain(|a| *a != here && a.port() == b.port);
+        alts.insert(0, here);
+        alts.truncate(4);
         let fresh = match st.devices.get(&b.id) {
             Some(d) => d.seen.is_none() || d.addr != Some(addr) || d.name != b.name || d.displays != b.displays || d.sharing != b.sharing,
             None => true,
         };
-        st.devices.insert(b.id.clone(), Dev { name: b.name, platform: b.platform, addr: Some(addr), seen: Some(Instant::now()), displays: b.displays, sharing: b.sharing });
+        st.devices.insert(b.id.clone(), Dev { name: b.name, platform: b.platform, addr: Some(addr), alts, seen: Some(Instant::now()), displays: b.displays, sharing: b.sharing });
         drop(st);
         if fresh { self.emit_state(); }
     }
@@ -648,7 +669,7 @@ pub fn run(port: u16) -> Res<()> {
     let mut devices = HashMap::new();
     for s in &saved {
         if let Some(k) = net::unhex(&s.key) {
-            devices.insert(id_of(&k), Dev { name: s.name.clone(), platform: s.platform.clone(), addr: s.addr.parse().ok(), seen: None, displays: vec![], sharing: true });
+            devices.insert(id_of(&k), Dev { name: s.name.clone(), platform: s.platform.clone(), addr: s.addr.parse().ok(), alts: vec![], seen: None, displays: vec![], sharing: true });
         }
     }
     let agent = Arc::new(Agent {
