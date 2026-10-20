@@ -113,6 +113,7 @@ h2 { margin: 26px 0 10px; font-size: 14px; font-weight: 600; }
 .status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--sub); white-space: nowrap; }
 .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
 .status.on::before { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+.tag .i { width: 11px; height: 11px; vertical-align: -1px; margin-right: 3px; }
 .tag { font-size: 11px; padding: 1px 7px; border-radius: 9px; background: var(--card2); border: 1px solid var(--stroke); color: var(--sub); white-space: nowrap; }
 .dev-f { display: flex; gap: 6px; align-items: center; }
 .dev-f .grow { flex: 1; }
@@ -156,7 +157,7 @@ select:focus, input[type=text]:focus, textarea:focus { border-bottom: 2px solid 
 .seg button.on { background: var(--accent); color: var(--on-accent); font-weight: 600; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.chip { display: inline-flex; align-items: center; gap: 2px; padding: 2px 2px 2px 12px; border-radius: 6px; background: var(--card2); border: 1px solid var(--stroke); }
+.chip { white-space: nowrap; display: inline-flex; align-items: center; gap: 2px; padding: 2px 2px 2px 12px; border-radius: 6px; background: var(--card2); border: 1px solid var(--stroke); }
 .chip .btn { height: 28px; }
 
 /* listas */
@@ -662,10 +663,13 @@ const layoutOf = act => /^layout\s+load\s+(\S+)$/i.exec(act.trim())?.[1];
 const hkForLayout = n => hks.find(h => layoutOf(h.act)?.toLowerCase() === n.toLowerCase());
 function renderLayouts() {
   const box = $('#layouts'), ls = visibleLayouts();
-  box.innerHTML = ls.length ? '' : '<span class="sub">Guarda la disposición actual (posición, resolución y monitores activos) para restaurarla cuando quieras.</span>';
+  box.innerHTML = ls.length ? '' : '<span class="sub">Guarda la disposición actual (posición, resolución y monitores activos, y las pantallas de otros equipos abiertas a pantalla completa) para restaurarla cuando quieras.</span>';
   for (const n of ls) {
     const hk = hkForLayout(n);
-    const c = el(`<span class="chip">${esc(n)}${hk ? `<span style="margin-left:8px">${comboHtml(hk.combo)}</span>` : ''}
+    // Pantallas de otros equipos (Kast Link) que se abren con la disposición.
+    const links = S?.layoutLinks?.[n] || [];
+    const lk = links.length ? `<span class="tag" style="margin-left:8px" title="${esc(links.map(([d, r, m]) => `${d} (pantalla ${r}) en tu monitor ${m}`).join(' · '))}">${icon('link')}${esc(links.map(l => `${l[0]} → ${l[2]}`).join(', '))}</span>` : '';
+    const c = el(`<span class="chip">${esc(n)}${lk}${hk ? `<span style="margin-left:8px">${comboHtml(hk.combo)}</span>` : ''}
       <button class="btn ghost icon" title="Aplicar">${icon('play')}</button>
       <button class="btn ghost icon" title="${hk ? 'Cambiar atajo' : 'Asignar atajo'}">${icon('key')}</button>
       <button class="btn ghost icon" title="Eliminar">${icon('x')}</button></span>`);
@@ -709,7 +713,10 @@ $('#layoutSave').onclick = async () => {
   const n = await prompt('Guardar disposición', 'Nombre (sin espacios)', 'escritorio');
   if (!n) return;
   if (/[\s\\/:*?"<>|;]/.test(n)) return toast('El nombre no puede tener espacios ni \\ / : * ? " < > | ;', true);
-  run(`layout save ${n}`, { refresh: true, ok: `Disposición «${n}» guardada` });
+  const links = (L?.sessions || []).filter(s => s.dir === 'in' && s.show_on > 0);
+  run(`layout save ${n}`, { refresh: true, ok: `Disposición «${n}» guardada${links.length ? ` con ${links.map(s => `${s.peer} en tu monitor ${s.show_on}`).join(' y ')}` : ''}` });
+  // Kast Link escribe sus sesiones justo después: se vuelve a pedir el estado para mostrarlas.
+  setTimeout(() => post('state'), 800);
 };
 
 /* ---------- configuración (kast.ini) ---------- */

@@ -111,8 +111,24 @@ static void link_send(const char *json)
 {
     DWORD w;
     if (!link_in) return;
-    WriteFile(link_in, json, (DWORD)strlen(json), &w, NULL);
-    WriteFile(link_in, "\n", 1, &w, NULL);
+    /* Una sola escritura por línea: también se envía desde el hilo de trabajo (disposiciones). */
+    size_t n = strlen(json);
+    char *line = malloc(n + 1);
+    memcpy(line, json, n);
+    line[n] = '\n';
+    WriteFile(link_in, line, (DWORD)n + 1, &w, NULL);
+    free(line);
+}
+
+/* Disposición guardada o aplicada: el agente guarda o restaura sus sesiones (layouts\<nombre>.link). */
+static void link_layout(const char *op, const char *path)
+{
+    Sb s = { 0 };
+    sb_printf(&s, "{\"cmd\":\"layout_%s\",\"path\":", op);
+    sb_json(&s, path);
+    sb_add(&s, "}", 1);
+    link_send(s.p);
+    free(s.p);
 }
 
 /* Cerrar su stdin hace que el agente termine. */
@@ -361,6 +377,18 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
     case WM_KAST_OPENUI: ui_open(); return 0;
+    case WM_COPYDATA: {
+        /* kast.exe layout save|load: "save\n<ruta>" */
+        const COPYDATASTRUCT *cd = (const COPYDATASTRUCT *)lp;
+        if (cd->dwData != KAST_COPY_LINK_LAYOUT || !cd->cbData || ((const char *)cd->lpData)[cd->cbData - 1]) return FALSE;
+        char *op = _strdup(cd->lpData), *path = strchr(op, '\n');
+        if (path) {
+            *path++ = 0;
+            if (!strcmp(op, "save") || !strcmp(op, "load")) link_layout(op, path);
+        }
+        free(op);
+        return TRUE;
+    }
     case WM_KAST_RESULT:
         ui_post_json((const char *)lp);
         free((void *)lp);
@@ -425,6 +453,7 @@ int main(int argc, char **argv)
 
     reload_config();
     tray_add();
+    link_layout_hook = link_layout;
     link_start();
     CloseHandle(CreateThread(NULL, 256 * 1024, worker, NULL, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL));
     if (argc > 1 && !strcmp(argv[1], "--ui")) ui_open();

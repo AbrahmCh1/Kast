@@ -135,6 +135,8 @@ Ver y **controlar** otro equipo (como AnyDesk) en uno de tus monitores, por la r
 
 En la ventana del visor, `Esc` la cierra y `F11` alterna pantalla completa; al controlar, todas las teclas van al otro equipo, así que se usan `Ctrl+Alt+Shift+F` (pantalla completa) y `Ctrl+Alt+Shift+Q` (cerrar). Entre Windows y Mac, `Ctrl` y `Cmd` se intercambian para que los atajos (copiar, pegar…) funcionen como esperas. Desde **Dispositivos** se ven las sesiones activas y se pueden cortar, y el interruptor **Permitir que otros vean mis pantallas** desactiva las peticiones entrantes. La primera vez, el sistema pide permisos: en Windows, el del firewall (puertos 47800 TCP y 47801 UDP, redes privadas); en Mac, **Red local** (para encontrar otros equipos) y **Grabación de pantalla** (para compartir) y **Accesibilidad** (para que te controlen; Kast → Dispositivos muestra «Dar permiso»). En Windows, las ventanas de administrador y los avisos de UAC no aceptan el control remoto, igual que en otras herramientas sin servicio del sistema.
 
+**En una disposición (Windows):** si guardas una disposición de pantallas mientras tienes otro equipo a pantalla completa en uno de tus monitores, la disposición lo recuerda. Al aplicarla (desde Kast o con su atajo), se restauran los monitores y se vuelve a abrir esa pantalla remota en su monitor, con control si lo tenía. Las sesiones que ya coinciden se mantienen, y las de pantalla completa que no forman parte de la disposición se cierran. Para que no haya que aceptar nada, marca **Recordar este dispositivo** en el otro equipo.
+
 **Windows y macOS se entienden entre sí**: cualquiera puede compartir y cualquiera puede ver.
 
 | | Windows | macOS |

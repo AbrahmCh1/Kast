@@ -115,6 +115,31 @@ try:
     assert s["control"] == want
     hang_up(s)
     print("6) recordado sólo para ver: entra sin preguntar; al pedir control, vuelve a preguntar")
+
+    # Disposiciones: guardar la sesión (monitor 9 no existe: se abre en ventana, sin tapar pantallas reales),
+    # cortarla, restaurarla y después cargar una disposición sin sesiones.
+    lay = os.path.join(ha, "prueba.link")
+    A.send(cmd="connect", id=me_b["id"], monitor=1, show_on=9, control=False)
+    s = live_session()
+    A.send(cmd="layout_save", path=lay)
+    A.send(cmd="state")
+    A.wait(state(lambda m: True))
+    saved = open(lay, encoding="utf-8").read().split("	")
+    assert saved[0] == me_b["id"] and saved[2:4] == ["1", "9"], saved
+    hang_up(s)
+    A.send(cmd="layout_load", path=lay)
+    s = live_session()
+    assert s["show_on"] == 9
+    A.send(cmd="layout_load", path=lay)  # ya coincide: se mantiene
+    time.sleep(2)
+    A.send(cmd="state")
+    st = A.wait(state(lambda m: True))
+    assert [x["session"] for x in st["sessions"] if x["dir"] == "in"] == [s["session"]], st["sessions"]
+    empty = os.path.join(ha, "vacia.link")
+    open(empty, "w").close()
+    A.send(cmd="layout_load", path=empty)
+    A.wait(state(lambda m: not m["sessions"]))
+    print("7) disposiciones: guarda la sesión, la restaura, la mantiene si ya está y la cierra si no está")
     print("OK")
 finally:
     for a in (A, B):

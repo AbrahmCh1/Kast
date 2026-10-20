@@ -25,6 +25,8 @@ pub enum Event {
     /// `input`: con control, por aquí salen el teclado y el ratón hacia el otro equipo.
     Open { session: u64, shared: Arc<Mutex<Shared>>, monitor: Option<usize>, title: String, input: Option<Sender<Vec<u8>>> },
     Redraw(u64),
+    /// Vuelve a poner la sesión a pantalla completa en el monitor n (tras cambiar la disposición de pantallas).
+    Place { session: u64, monitor: usize },
     /// La sesión terminó (por la red o porque se cerró): se cierra su ventana.
     Close(u64),
 }
@@ -219,12 +221,8 @@ impl ApplicationHandler<Event> for App {
         match event {
             Event::Open { session, shared, monitor, title, input } => {
                 let mut attrs = Window::default_attributes().with_title(&title).with_inner_size(LogicalSize::new(1280.0, 720.0));
-                if let Some(n) = monitor {
-                    let mut mons: Vec<_> = el.available_monitors().collect();
-                    mons.sort_by_key(|m| (m.position().x, m.position().y));
-                    if let Some(m) = mons.into_iter().nth(n.saturating_sub(1)) {
-                        attrs = attrs.with_fullscreen(Some(Fullscreen::Borderless(Some(m))));
-                    }
+                if let Some(m) = monitor.and_then(|n| nth_monitor(el, n)) {
+                    attrs = attrs.with_fullscreen(Some(Fullscreen::Borderless(Some(m))));
                 }
                 let Ok(window) = el.create_window(attrs) else { (self.on_closed)(session); return };
                 let window = Rc::new(window);
@@ -235,6 +233,11 @@ impl ApplicationHandler<Event> for App {
                 self.by_session.insert(session, id);
                 self.wins.insert(id, Win { session, window, surface, shared, input, layout: (0.0, 0.0, 0.0, 0, 0),
                                            mods: ModifiersState::empty(), keys: HashSet::new(), buttons: [false; 5], pos: None });
+            }
+            Event::Place { session, monitor } => {
+                if let Some(w) = self.by_session.get(&session).and_then(|id| self.wins.get(id)) {
+                    if let Some(m) = nth_monitor(el, monitor) { w.window.set_fullscreen(Some(Fullscreen::Borderless(Some(m)))); }
+                }
             }
             Event::Redraw(s) => {
                 if let Some(w) = self.by_session.get(&s).and_then(|id| self.wins.get(id)) { w.window.request_redraw(); }
@@ -247,6 +250,13 @@ impl ApplicationHandler<Event> for App {
             }
         }
     }
+}
+
+/// Monitor n (desde 1), numerados de izquierda a derecha como en Kast.
+fn nth_monitor(el: &ActiveEventLoop, n: usize) -> Option<winit::monitor::MonitorHandle> {
+    let mut mons: Vec<_> = el.available_monitors().collect();
+    mons.sort_by_key(|m| (m.position().x, m.position().y));
+    mons.into_iter().nth(n.checked_sub(1)?)
 }
 
 pub fn event_loop(agent: bool) -> Result<EventLoop<Event>, winit::error::EventLoopError> {

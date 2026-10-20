@@ -9,6 +9,8 @@
 //!   {"cmd":"answer","req":3,"accept":true,"remember":true,"control":true}
 //!   {"cmd":"disconnect","session":5}
 //!   {"cmd":"sharing","enabled":true}                   permitir que otros pidan ver mis pantallas
+//!   {"cmd":"layout_save","path":"…\\X.link"}          guardar con una disposición las sesiones a pantalla completa
+//!   {"cmd":"layout_load","path":"…\\X.link"}          restaurarlas (mantiene las que ya coinciden)
 //! Agente -> app:
 //!   {"t":"link","ev":"state",…}   estado completo (yo, dispositivos, peticiones, sesiones)
 //!   {"t":"link","ev":"request",…} alguien pide ver mis pantallas (la app debe mostrarse)
@@ -70,6 +72,19 @@ struct Sess {
     /// Cortada a propósito (ventana cerrada o "Desconectar").
     stopped: bool,
     /// Con control de teclado y ratón.
+    control: bool,
+    /// "in": dispositivo (id), monitor local (0 = ventana) y si se pidió control, para las disposiciones.
+    dev: String,
+    show_on: usize,
+    want_control: bool,
+}
+
+/// Sesión guardada con una disposición: id, nombre, su pantalla, mi monitor y control.
+struct LayoutSess {
+    dev: String,
+    name: String,
+    monitor: usize,
+    show_on: usize,
     control: bool,
 }
 
@@ -142,7 +157,7 @@ impl Agent {
                             "trusted": false, "known": false, "manual": true, "sharing": true, "displays": []}))
             .collect();
         let requests: Vec<Value> = st.requests.iter().map(|r| json!({"req": r.req, "name": r.name, "platform": r.platform, "code": r.code, "monitor": r.monitor, "control": r.control})).collect();
-        let sessions: Vec<Value> = st.sessions.iter().map(|s| json!({"session": s.session, "dir": s.dir, "peer": s.peer, "monitor": s.monitor, "state": s.state, "code": s.code, "control": s.control})).collect();
+        let sessions: Vec<Value> = st.sessions.iter().map(|s| json!({"session": s.session, "dir": s.dir, "peer": s.peer, "monitor": s.monitor, "state": s.state, "code": s.code, "control": s.control, "show_on": s.show_on})).collect();
         let me = json!({"id": self.id, "name": self.name, "platform": store::platform(), "port": self.port,
                         "sharing": self.sharing.load(Ordering::Relaxed), "capture": platform::capture_allowed(), "input": platform::input_allowed(),
                         "displays": self.displays.lock().unwrap().iter().map(|(w, h)| json!([w, h])).collect::<Vec<_>>()});
@@ -194,6 +209,11 @@ impl Agent {
                 self.emit_state();
             }
             "disconnect" => self.stop_session(n("session")),
+            "layout_save" => self.layout_save(&s("path")),
+            "layout_load" => {
+                let (a, path) = (self.clone(), s("path"));
+                std::thread::spawn(move || a.layout_load(&path));
+            }
             "request_input" => {
                 platform::request_input();
                 self.toast("Activa Kast en «Accesibilidad» para que otros puedan controlar este equipo", false);
@@ -217,6 +237,65 @@ impl Agent {
         if let Some(s) = st.sessions.iter_mut().find(|s| s.session == session) {
             s.stopped = true;
             if let Some(sock) = &s.sock { let _ = sock.shutdown(std::net::Shutdown::Both); }
+        }
+    }
+
+    // ------------------------------------------------------------ disposiciones
+
+    /// Guarda las sesiones a pantalla completa en un monitor (las de ventana no forman parte de la disposición).
+    fn layout_save(&self, path: &str) {
+        let st = self.st.lock().unwrap();
+        let body: String = st.sessions.iter().filter(|s| s.dir == "in" && s.show_on > 0 && !s.stopped)
+            .map(|s| format!("{}\t{}\t{}\t{}\t{}\n", s.dev, s.peer.replace(['\t', '\n', '\r'], " "), s.monitor, s.show_on, s.want_control as u8))
+            .collect();
+        drop(st);
+        if let Err(e) = std::fs::write(path, body) { store::log(&format!("disposición {path}: {e}")); }
+    }
+
+    /// Deja exactamente las sesiones guardadas: mantiene (y recoloca) las que ya están, corta las demás
+    /// de pantalla completa y conecta las que faltan. Sin archivo (disposición antigua) no toca nada.
+    fn layout_load(self: &Arc<Self>, path: &str) {
+        let Ok(text) = std::fs::read_to_string(path) else { return };
+        let want: Vec<LayoutSess> = text.lines().filter_map(|l| {
+            let f: Vec<&str> = l.split('\t').collect();
+            (f.len() >= 5).then(|| LayoutSess {
+                dev: f[0].into(), name: f[1].into(), monitor: f[2].parse().unwrap_or(1), show_on: f[3].parse().unwrap_or(0), control: f[4] == "1",
+            })
+        }).filter(|w| !w.dev.is_empty() && w.show_on > 0).collect();
+        // Que Windows termine de aplicar la nueva disposición de pantallas antes de colocar ventanas.
+        std::thread::sleep(Duration::from_millis(800));
+        let same = |s: &Sess, w: &LayoutSess| s.dev == w.dev && s.monitor == w.monitor && s.show_on == w.show_on;
+        let (keep, stop, missing) = {
+            let st = self.st.lock().unwrap();
+            let live: Vec<&Sess> = st.sessions.iter().filter(|s| s.dir == "in" && !s.stopped).collect();
+            let keep: Vec<(u64, usize)> = live.iter().filter(|s| want.iter().any(|w| same(s, w))).map(|s| (s.session, s.show_on)).collect();
+            let stop: Vec<u64> = live.iter().filter(|s| s.show_on > 0 && !want.iter().any(|w| same(s, w))).map(|s| s.session).collect();
+            let missing: Vec<&LayoutSess> = want.iter().filter(|w| !live.iter().any(|s| same(s, w))).collect();
+            (keep, stop, missing.into_iter().map(|w| LayoutSess { dev: w.dev.clone(), name: w.name.clone(), ..*w }).collect::<Vec<_>>())
+        };
+        for s in stop { self.stop_session(s); }
+        for (session, monitor) in keep { let _ = self.proxy.send_event(viewer::Event::Place { session, monitor }); }
+        for w in missing {
+            let a = self.clone();
+            std::thread::spawn(move || {
+                // Recién arrancado (o con la red cambiando), el dispositivo puede tardar en anunciarse.
+                if !a.wait_online(&w.dev, Duration::from_secs(20)) {
+                    a.toast(format!("{} no está en la red: no se pudo abrir su pantalla en tu monitor {}", w.name, w.show_on), true);
+                    return;
+                }
+                a.connect(&w.dev, w.monitor, w.show_on, w.control);
+            });
+        }
+    }
+
+    fn wait_online(&self, id: &str, max: Duration) -> bool {
+        if id.starts_with("ip:") { return true; }
+        let t = Instant::now();
+        loop {
+            let online = self.st.lock().unwrap().devices.get(id).and_then(|d| d.seen).map(|s| s.elapsed() < ONLINE).unwrap_or(false);
+            if online { return true; }
+            if t.elapsed() > max { return false; }
+            std::thread::sleep(Duration::from_millis(300));
         }
     }
 
@@ -263,7 +342,8 @@ impl Agent {
         };
         let Some(addr) = addr else { self.toast(format!("{name} no está disponible"), true); return };
         let session = self.id();
-        self.st.lock().unwrap().sessions.push(Sess { session, dir: "in", peer: name.clone(), monitor, state: "connecting", code: String::new(), sock: None, stopped: false, control });
+        self.st.lock().unwrap().sessions.push(Sess { session, dir: "in", peer: name.clone(), monitor, state: "connecting", code: String::new(), sock: None,
+                                                     stopped: false, control, dev: id.to_string(), show_on, want_control: control });
         self.emit_state();
         let r = self.view(session, id, addr, &name, monitor, show_on, control);
         let _ = self.proxy.send_event(viewer::Event::Close(session));
@@ -457,7 +537,8 @@ impl Agent {
         let session = self.id();
         let sock = ch.shutdown_handle().ok();
         if let Some(s) = &sock { s.set_read_timeout(None)?; }
-        self.st.lock().unwrap().sessions.push(Sess { session, dir: "out", peer: name.clone(), monitor, state: "live", code: ch.code.clone(), sock, stopped: false, control });
+        self.st.lock().unwrap().sessions.push(Sess { session, dir: "out", peer: name.clone(), monitor, state: "live", code: ch.code.clone(), sock,
+                                                     stopped: false, control, dev: String::new(), show_on: 0, want_control: control });
         self.emit_state();
         store::log(&format!("{name} empieza a {} la pantalla {monitor}", if control { "controlar" } else { "ver" }));
         if control {

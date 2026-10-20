@@ -60,7 +60,16 @@ impl Source {
         } else {
             let outs = capture::outputs()?;
             let out = outs.get(index.wrapping_sub(1)).ok_or_else(|| format!("monitor {index} no existe (hay {})", outs.len()))?;
-            let mut cap = capture::Capturer::new(out)?;
+            // Justo después de otra sesión (p. ej. al cambiar de disposición) o de un cambio de escritorio,
+            // DuplicateOutput falla un momento (E_INVALIDARG / E_ACCESSDENIED): se reintenta.
+            let mut tries = 0;
+            let mut cap = loop {
+                match capture::Capturer::new(out) {
+                    Ok(c) => break c,
+                    Err(_) if tries < 10 => { tries += 1; std::thread::sleep(Duration::from_millis(200)); }
+                    Err(e) => return Err(e.into()),
+                }
+            };
             // El primer AcquireNextFrame siempre trae la imagen completa del escritorio.
             let mut first = None;
             for _ in 0..50 {

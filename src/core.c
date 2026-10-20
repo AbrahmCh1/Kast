@@ -837,6 +837,27 @@ static void layout_path(char *out, const char *name)
 
 #define LAYOUT_MAGIC 0x5453414Bu
 
+void (*link_layout_hook)(const char *op, const char *path);
+
+/* Sesiones de Kast Link de la disposición (layouts\<nombre>.link, lo escribe y lee el agente). */
+static void link_layout_path(char *out, const char *name)
+{
+    snprintf(out, MAX_PATH, "%s\\layouts\\%s.link", exedir, name);
+}
+
+static void layout_link(const char *op, const char *name)
+{
+    char path[MAX_PATH];
+    link_layout_path(path, name);
+    if (link_layout_hook) { link_layout_hook(op, path); return; }
+    HWND h = find_daemon();
+    if (!h) return;
+    char buf[MAX_PATH + 16];
+    int n = snprintf(buf, sizeof buf, "%s\n%s", op, path);
+    COPYDATASTRUCT cd = { KAST_COPY_LINK_LAYOUT, (DWORD)n + 1, buf };
+    SendMessageTimeoutA(h, WM_COPYDATA, 0, (LPARAM)&cd, SMTO_ABORTIFHUNG, 2000, NULL);
+}
+
 static int layout_save(const char *name)
 {
     UINT32 np = 0, nm = 0;
@@ -855,6 +876,7 @@ static int layout_save(const char *name)
             fwrite(m, sizeof *m, nm, f);
             fclose(f);
             say("layout '%s' guardado\n", name);
+            layout_link("save", name);
             rc = 0;
         }
     }
@@ -909,6 +931,7 @@ static int layout_load(const char *name)
     LONG r = SetDisplayConfig(np, p, nm, m, SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES | SDC_SAVE_TO_DATABASE);
     if (r) say("layout: error %ld\n", r);
     free(p); free(m); free(P); free(M);
+    layout_link("load", name);
     return !!r;
 }
 
@@ -937,7 +960,10 @@ static int cmd_layout(int ac, char **av)
     if (ac >= 3 && !_stricmp(av[1], "del")) {
         char path[MAX_PATH];
         layout_path(path, av[2]);
-        return !DeleteFileA(path);
+        int ok = DeleteFileA(path);
+        link_layout_path(path, av[2]);
+        DeleteFileA(path);
+        return !ok;
     }
     if (ac >= 2 && _stricmp(av[1], "list")) { sayl("uso: layout [list] | layout save|load|del <nombre>"); return 1; }
     layout_each(layout_print, NULL);
@@ -1126,6 +1152,33 @@ static void layout_json(const char *n, void *ctx)
     sb_json(s, n);
 }
 
+/* "nombre":[["Mac mini",1,3],…]: dispositivo, su pantalla y el monitor local de cada sesión guardada. */
+static void layout_links_json(const char *n, void *ctx)
+{
+    Sb *s = ctx;
+    char path[MAX_PATH], line[512];
+    link_layout_path(path, n);
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    if (s->p[s->n - 1] != '{') sb_add(s, ",", 1);
+    sb_json(s, n);
+    sb_add(s, ":[", 2);
+    int first = 1;
+    while (fgets(line, sizeof line, f)) {
+        /* id \t nombre \t su pantalla \t mi monitor \t control */
+        char *fld[5] = { 0 }, *p = line;
+        int k = 0;
+        while (k < 5 && p) { fld[k++] = p; p = strchr(p, '\t'); if (p) *p++ = 0; }
+        if (k < 4) continue;
+        sb_add(s, first ? "[" : ",[", first ? 1 : 2);
+        first = 0;
+        sb_json(s, fld[1]);
+        sb_printf(s, ",%d,%d]", atoi(fld[2]), atoi(fld[3]));
+    }
+    fclose(f);
+    sb_add(s, "]", 1);
+}
+
 char *state_json(const char *log)
 {
     enum_mons();
@@ -1169,9 +1222,12 @@ char *state_json(const char *log)
     }
     sb_printf(&s, "],\"layouts\":[");
     layout_each(layout_json, &s);
+    sb_printf(&s, "],\"layoutLinks\":{");
+    layout_each(layout_links_json, &s);
+    sb_printf(&s, "}");
     BOOL vanish = FALSE;
     SystemParametersInfoW(SPI_GETMOUSEVANISH, 0, &vanish, 0);
-    sb_printf(&s, "],\"autostart\":%s,\"vanish\":%s,\"dir\":", autostart_get() ? "true" : "false", vanish ? "true" : "false");
+    sb_printf(&s, ",\"autostart\":%s,\"vanish\":%s,\"dir\":", autostart_get() ? "true" : "false", vanish ? "true" : "false");
     sb_json(&s, exedir);
     sb_printf(&s, ",\"log\":");
     sb_json(&s, log);

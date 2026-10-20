@@ -58,4 +58,12 @@ int autostart_set(int on);
 void cache_clear(void);
 void free_phys(void);
 HWND find_daemon(void);
+/* Disposiciones con sesiones de Kast Link: el servicio pasa "save"/"load" y la ruta del .link al agente.
+ * En kast.exe (sin agente) se reenvía al servicio por WM_COPYDATA. */
+extern void (*link_layout_hook)(const char *op, const char *path);
+#define KAST_COPY_LINK_LAYOUT 0x4B4C4E4Bu
+/* Disposiciones con sesiones de Kast Link: el servicio pasa "save"/"load" y la ruta del .link al agente.
+ * En kast.exe (sin agente) se reenvía al servicio por WM_COPYDATA. */
+extern void (*link_layout_hook)(const char *op, const char *path);
+#define KAST_COPY_LINK_LAYOUT 0x4B4C4E4Bu
 int launch_daemon(const char *args);
