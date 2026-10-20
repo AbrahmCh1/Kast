@@ -143,6 +143,8 @@ try:
     print("OK")
 finally:
     for a in (A, B):
+        if a.p.poll() is not None:
+            print(f"!!! el agente {a.name} terminó solo (código {a.p.returncode})")
         try:
             a.p.stdin.close()
             a.p.wait(timeout=5)

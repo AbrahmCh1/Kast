@@ -265,6 +265,21 @@ impl Source {
 
     pub fn size(&self) -> (u32, u32) { (self.w, self.h) }
 
+    /// Detiene la captura y el codificador (sin esto ScreenCaptureKit seguía capturando y VideoToolbox llamaba a
+    /// `enc_callback` con el contexto ya liberado: el agente se caía al terminar una sesión).
+    fn stop(&self) {
+        let (tx, rx) = channel::<()>();
+        let tx = Mutex::new(tx);
+        let done = RcBlock::new(move |_err: *mut NSError| { let _ = tx.lock().unwrap().send(()); });
+        unsafe { self._stream.stopCaptureWithCompletionHandler(Some(&done)) };
+        let _ = rx.recv_timeout(Duration::from_secs(3));
+        let session = &self._output.ivars().session;
+        unsafe {
+            session.complete_frames(objc2_core_media::kCMTimeInvalid);
+            session.invalidate();
+        }
+    }
+
     /// ScreenCaptureKit dibuja el cursor dentro de la imagen.
     pub fn cursor(&self) -> (i32, i32, bool) { (0, 0, false) }
 
@@ -275,6 +290,11 @@ impl Source {
             Err(RecvTimeoutError::Disconnected) => Err("el codificador se detuvo".into()),
         }
     }
+}
+
+impl Drop for Source {
+    // Antes de liberar `_ctx` (refcon del codificador): después de esto ya no llegan fotogramas ni callbacks.
+    fn drop(&mut self) { self.stop(); }
 }
 
 // ---------------------------------------------------------------- decodificador
