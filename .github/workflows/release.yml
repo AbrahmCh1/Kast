@@ -1,0 +1,67 @@
+# Compila Kast en cada push/PR y publica un Release al subir una etiqueta v* (p. ej. v1.0.0).
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+
+      - name: Compilar
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME -replace '^v', '' }
+                     else { "dev-$($env:GITHUB_SHA.Substring(0, 7))" }
+          ./build.ps1 -Version $version
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $reported = (./bin/kast.exe version).Trim()
+          if ($reported -ne "kast $version") { throw "versión inesperada: '$reported'" }
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Empaquetar
+        shell: pwsh
+        run: |
+          $name = "Kast-$env:VERSION-win-x64"
+          $dir = "dist/$name"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item bin/kast.exe, bin/kastd.exe, bin/WebView2Loader.dll, bin/kast.ini, LICENSE, README.md $dir
+          Copy-Item third_party/webview2/LICENSE.txt "$dir/WebView2-LICENSE.txt"
+          Compress-Archive -Path "$dir/*" -DestinationPath "dist/$name.zip"
+          $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name.zip" | Out-File "dist/$name.zip.sha256" -Encoding ascii -NoNewline
+          "PKG=$name" >> $env:GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG }}
+          path: |
+            dist/${{ env.PKG }}.zip
+            dist/${{ env.PKG }}.zip.sha256
+
+      - name: Publicar release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $pre = if ($env:VERSION -match '-') { '--prerelease' } else { $null }
+          gh release create $env:GITHUB_REF_NAME "dist/$env:PKG.zip" "dist/$env:PKG.zip.sha256" `
+            --title "Kast $env:VERSION" --generate-notes $pre

@@ -11,6 +11,16 @@
 #include <string.h>
 #include <ctype.h>
 
+/* Versión: build.ps1 -Version 1.2.3 define KAST_VERSION_RAW=1.2.3 (sin comillas, para no depender
+ * de cómo cada shell pasa las comillas a zig) y aquí se convierte en cadena. */
+#define KAST_STR2(x) #x
+#define KAST_STR(x) KAST_STR2(x)
+#ifdef KAST_VERSION_RAW
+#define KAST_VERSION KAST_STR(KAST_VERSION_RAW)
+#else
+#define KAST_VERSION "dev"
+#endif
+
 #define WNDCLASS_NAME  "KastDaemon"
 #define WM_KAST_RELOAD (WM_APP + 1)
 #define WM_KAST_OPENUI (WM_APP + 2)

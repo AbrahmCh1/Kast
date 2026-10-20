@@ -1251,7 +1251,7 @@ static int cmd_post(UINT msg, const char *ok)
 }
 
 static const char HELP[] =
-    "kast — control de monitores\n"
+    "kast " KAST_VERSION " — control de monitores\n"
     "  list                        monitores (1..n de izquierda a derecha, * = principal)\n"
     "  b   [mon] [valor]           brillo     (valor: 0-100 | +10 | -10)\n"
     "  braw [mon] [valor]          brillo en la escala real del monitor (sin calibración)\n"
@@ -1285,6 +1285,7 @@ static int run_cmd(int ac, char **av)
     const char *c = av[0];
 #define IS(s) (!_stricmp(c, s))
     if (IS("help") || IS("-h") || IS("/?") || IS("--help")) return say("%s", HELP), 0;
+    if (IS("version") || IS("--version") || IS("-v")) return say("kast %s\n", KAST_VERSION), 0;
     if (IS("sleep")) return Sleep(ac > 1 ? atoi(av[1]) : 0), 0;
     if (IS("lock")) return !LockWorkStation();
     if (IS("off")) {

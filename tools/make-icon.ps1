@@ -1,4 +1,4 @@
-# Genera assets/kast.ico (PNG multi-tamaño) y assets/kast-256.png con System.Drawing.
+﻿# Genera assets/kast.ico (PNG multi-tamaño) y assets/kast-256.png con System.Drawing.
 # Cada tamaño se dibuja a 4x y se reduce, con una versión simplificada para 16-24 px.
 Add-Type -AssemblyName System.Drawing
 

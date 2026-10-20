@@ -141,8 +141,9 @@ static HRESULT STDMETHODCALLTYPE ctrl_done(ICoreWebView2CreateCoreWebView2Contro
         ICoreWebView2Controller2_Release(c2);
     }
     ICoreWebView2_add_WebMessageReceived(wv, &msg_h, &msg_tok);
-    wchar_t init[96];
-    swprintf(init, 96, L"window.KAST={mica:%d};", ui_mica);
+    wchar_t ver[32], init[128];
+    MultiByteToWideChar(CP_UTF8, 0, KAST_VERSION, -1, ver, 32);
+    swprintf(init, 128, L"window.KAST={mica:%d,version:'%ls'};", ui_mica, ver);
     ICoreWebView2_AddScriptToExecuteOnDocumentCreated(wv, init, NULL);
     resize();
     wchar_t *html = load_html();

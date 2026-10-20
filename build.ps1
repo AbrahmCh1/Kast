@@ -1,7 +1,12 @@
-# Compila kast.exe (CLI) y kastd.exe (bandeja + atajos + UI) con zig cc.
+﻿# Compila kast.exe (CLI) y kastd.exe (bandeja + atajos + UI) con zig cc.
+#   .\build.ps1                 versión "dev"
+#   .\build.ps1 -Version 1.2.0  versión que muestran la interfaz y `kast version`
+param([string]$Version = 'dev')
+
+if ($Version -notmatch '^[0-9A-Za-z][0-9A-Za-z.\-]*$') { throw "versión inválida: '$Version' (sólo letras, números, . y -)" }
 $zig = (Get-Command zig -ErrorAction SilentlyContinue).Source
 if (-not $zig) {
-    $zig = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Recurse -Filter zig.exe |
+    $zig = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Recurse -Filter zig.exe -ErrorAction SilentlyContinue |
         Select-Object -First 1 -ExpandProperty FullName
 }
 if (-not $zig) { throw 'zig no encontrado: winget install zig.zig' }
@@ -9,7 +14,8 @@ if (-not $zig) { throw 'zig no encontrado: winget install zig.zig' }
 Set-Location $PSScriptRoot
 New-Item -ItemType Directory -Force bin | Out-Null
 $flags = '-target', 'x86_64-windows-gnu', '-std=c11', '-Os', '-s', '-Wall', '-Wextra',
-         '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections', '-Ithird_party/webview2', '-Wno-unknown-pragmas'
+         '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections', '-Ithird_party/webview2', '-Wno-unknown-pragmas',
+         "-DKAST_VERSION_RAW=$Version"
 $libs = '-luser32', '-ldxva2', '-ladvapi32', '-lgdi32'
 
 & $zig cc @flags src/core.c src/cli.c src/kast.rc @libs -o bin/kast.exe
