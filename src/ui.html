@@ -36,7 +36,7 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .app { display: grid; grid-template-columns: 228px 1fr; height: 100%; }
 nav { display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; background: var(--side); }
 .brand { display: flex; align-items: center; gap: 11px; padding: 4px 8px 20px; }
-.brand .logo { width: 34px; height: 34px; flex: none; filter: drop-shadow(0 2px 6px rgba(63,75,240,.28)); }
+.brand .logo { width: 34px; height: 34px; flex: none; filter: drop-shadow(0 2px 6px rgba(0,0,0,.22)); }
 .brand b { display: block; font: 600 16px/1.2 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; }
 .brand small { display: block; font-size: 11.5px; color: var(--sub); }
 .nav, .btn, .seg button, .mbox { transition: background .12s, border-color .12s, color .12s, transform .12s, box-shadow .12s; }
@@ -125,7 +125,7 @@ h2 { margin: 26px 0 10px; font-size: 14px; font-weight: 600; }
 .mon { display: flex; flex-direction: column; gap: 12px; transition: box-shadow .3s; }
 .mon.flash { box-shadow: 0 0 0 2px var(--accent); }
 .mon-h { display: flex; align-items: center; gap: 12px; }
-.badge { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; font-weight: 600; background: linear-gradient(135deg, #3884ff, #8b5cf6); color: #fff; flex: none; }
+.badge { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; font-weight: 600; background: linear-gradient(180deg, #3a3a40, #1c1c1f); color: #fff; flex: none; }
 .mon-h .t { flex: 1; min-width: 0; }
 .mon-h .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pill { font-size: 11.5px; padding: 2px 9px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; white-space: nowrap; }
@@ -255,8 +255,9 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; m
   <nav>
     <div class="brand">
       <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
-        <defs><linearGradient id="lg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5a66ff"/><stop offset="1" stop-color="#3f4bf0"/></linearGradient></defs>
+        <defs><linearGradient id="lg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3a3a40"/><stop offset="1" stop-color="#161618"/></linearGradient></defs>
         <rect x="3" y="3" width="58" height="58" rx="14" fill="url(#lg)"/>
+        <rect x="3.25" y="3.25" width="57.5" height="57.5" rx="13.75" fill="none" stroke="#fff" stroke-opacity=".11" stroke-width=".5"/>
         <rect x="14" y="16" width="36" height="25" rx="6" fill="none" stroke="#fff" stroke-width="4"/>
         <path d="M32 16H44a6 6 0 0 1 6 6V35a6 6 0 0 1-6 6H32Z" fill="#fff"/>
         <path d="M24 49H40" stroke="#fff" stroke-width="4" stroke-linecap="round"/>

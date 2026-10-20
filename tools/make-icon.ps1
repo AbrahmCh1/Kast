@@ -1,5 +1,5 @@
 ﻿# Genera assets/kast.ico (PNG multi-tamaño), assets/kast-256.png y assets/kast-1024.png (macOS) con System.Drawing.
-# El diseño es assets/kast.svg: baldosa índigo y una pantalla con la mitad derecha rellena (brillo/contraste).
+# El diseño es assets/kast.svg: baldosa grafito y una pantalla con la mitad derecha rellena (brillo/contraste).
 # Cada tamaño se dibuja a 4x y se reduce; de 16 a 24 px los trazos son más gruesos.
 Add-Type -AssemblyName System.Drawing
 
@@ -31,8 +31,13 @@ function Draw([int]$size, [float]$margin = -1) {
     # baldosa
     $tile = RoundRect (3 * $u) (3 * $u) (58 * $u) (58 * $u) (14 * $u)
     $rect = New-Object Drawing.RectangleF 0, (3 * $u), $S, (58 * $u)
-    $grad = New-Object Drawing.Drawing2D.LinearGradientBrush $rect, ([Drawing.Color]::FromArgb(255, 90, 102, 255)), ([Drawing.Color]::FromArgb(255, 63, 75, 240)), 90.0
+    $grad = New-Object Drawing.Drawing2D.LinearGradientBrush $rect, ([Drawing.Color]::FromArgb(255, 58, 58, 64)), ([Drawing.Color]::FromArgb(255, 22, 22, 24)), 90.0
     $g.FillPath($grad, $tile)
+    # filo claro muy sutil: que no se pierda sobre fondos oscuros (barra de tareas, Dock)
+    if (-not $small) {
+        $edge = RoundRect (3.25 * $u) (3.25 * $u) (57.5 * $u) (57.5 * $u) (13.75 * $u)
+        $g.DrawPath((New-Object Drawing.Pen ([Drawing.Color]::FromArgb(28, 255, 255, 255)), (0.5 * $u)), $edge)
+    }
 
     # pantalla: contorno, mitad derecha rellena y pie
     $white = [Drawing.Color]::White
