@@ -3,6 +3,7 @@
 use crate::input::Event as Input;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -20,11 +21,17 @@ pub struct Shared {
     pub cursor: (i32, i32, bool),
 }
 
+/// Envía al otro equipo los archivos soltados en la ventana.
+pub type FileDrop = Arc<dyn Fn(Vec<PathBuf>) + Send + Sync>;
+
 pub enum Event {
     /// Abre la ventana de una sesión. `monitor`: None = ventana, Some(n) = pantalla completa en el monitor n.
     /// `input`: con control, por aquí salen el teclado y el ratón hacia el otro equipo.
-    Open { session: u64, shared: Arc<Mutex<Shared>>, monitor: Option<usize>, title: String, input: Option<Sender<Vec<u8>>> },
+    /// `files`: con control, recibe los archivos que se arrastran a la ventana.
+    Open { session: u64, shared: Arc<Mutex<Shared>>, monitor: Option<usize>, title: String, input: Option<Sender<Vec<u8>>>, files: Option<FileDrop> },
     Redraw(u64),
+    /// Estado que se muestra en el título (p. ej. el progreso de un envío); None lo quita.
+    Status { session: u64, text: Option<String> },
     /// Vuelve a poner la sesión a pantalla completa en el monitor n (tras cambiar la disposición de pantallas).
     Place { session: u64, monitor: usize },
     /// La sesión terminó (por la red o porque se cerró): se cierra su ventana.
@@ -43,6 +50,13 @@ struct Win {
     keys: HashSet<String>,
     buttons: [bool; 5],
     pos: Option<(i32, i32)>,
+    title: String,
+    files: Option<FileDrop>,
+    /// Archivos soltados pendientes de enviar (llegan uno por evento; se envían juntos).
+    drops: Vec<PathBuf>,
+    /// HWND de la ventana (Windows: atajos del sistema hacia el otro equipo).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    hwnd: isize,
 }
 
 // Flecha del cursor: '#' borde negro, '.' relleno blanco.
@@ -77,7 +91,11 @@ impl Win {
     fn input_event(&mut self, event: &WindowEvent) -> bool {
         match event {
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
-            WindowEvent::Focused(false) => self.release_all(),
+            WindowEvent::Focused(false) => {
+                self.release_all();
+                #[cfg(windows)]
+                crate::platform::syskeys::release(self.hwnd);
+            }
             WindowEvent::KeyboardInput { event: KeyEvent { physical_key: PhysicalKey::Code(code), state, .. }, .. } => {
                 let down = *state == ElementState::Pressed;
                 // Atajos locales: Ctrl+Alt+Shift+F pantalla completa, Ctrl+Alt+Shift+Q salir.
@@ -181,6 +199,8 @@ impl App {
     fn close(&mut self, el: &ActiveEventLoop, id: WindowId) {
         if let Some(mut w) = self.wins.remove(&id) {
             w.release_all();
+            #[cfg(windows)]
+            crate::platform::syskeys::unregister(w.hwnd);
             self.by_session.remove(&w.session);
             (self.on_closed)(w.session);
         }
@@ -212,14 +232,36 @@ impl ApplicationHandler<Event> for App {
                 }
             }
             WindowEvent::Resized(_) => { if let Some(w) = self.wins.get(&id) { w.window.request_redraw(); } }
+            WindowEvent::HoveredFile(_) => {
+                if let Some(w) = self.wins.get(&id) {
+                    w.window.set_title(&if w.files.is_some() { format!("{} — suelta para enviar los archivos", w.title) }
+                                       else { format!("{} — para enviar archivos, conecta con control", w.title) });
+                }
+            }
+            WindowEvent::HoveredFileCancelled => { if let Some(w) = self.wins.get(&id) { w.window.set_title(&w.title); } }
+            WindowEvent::DroppedFile(p) => {
+                if let Some(w) = self.wins.get_mut(&id) {
+                    w.window.set_title(&w.title);
+                    if w.files.is_some() { w.drops.push(p); }
+                }
+            }
             WindowEvent::RedrawRequested => { if let Some(w) = self.wins.get_mut(&id) { w.draw(); } }
             _ => {}
         }
     }
 
+    /// Los archivos soltados llegan en eventos seguidos: al vaciarse la cola se envían todos juntos.
+    fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
+        for w in self.wins.values_mut() {
+            if !w.drops.is_empty() {
+                if let Some(f) = &w.files { f(std::mem::take(&mut w.drops)); }
+            }
+        }
+    }
+
     fn user_event(&mut self, el: &ActiveEventLoop, event: Event) {
         match event {
-            Event::Open { session, shared, monitor, title, input } => {
+            Event::Open { session, shared, monitor, title, input, files } => {
                 let mut attrs = Window::default_attributes().with_title(&title).with_inner_size(LogicalSize::new(1280.0, 720.0));
                 if let Some(m) = monitor.and_then(|n| nth_monitor(el, n)) {
                     attrs = attrs.with_fullscreen(Some(Fullscreen::Borderless(Some(m))));
@@ -230,9 +272,18 @@ impl ApplicationHandler<Event> for App {
                 let Ok(surface) = softbuffer::Surface::new(&ctx, window.clone()) else { return };
                 window.focus_window();
                 let id = window.id();
+                let hwnd = native_handle(&window);
+                #[cfg(windows)]
+                if let Some(tx) = &input { crate::platform::syskeys::register(hwnd, tx.clone()); }
                 self.by_session.insert(session, id);
                 self.wins.insert(id, Win { session, window, surface, shared, input, layout: (0.0, 0.0, 0.0, 0, 0),
-                                           mods: ModifiersState::empty(), keys: HashSet::new(), buttons: [false; 5], pos: None });
+                                           mods: ModifiersState::empty(), keys: HashSet::new(), buttons: [false; 5], pos: None,
+                                           title, files, drops: Vec::new(), hwnd });
+            }
+            Event::Status { session, text } => {
+                if let Some(w) = self.by_session.get(&session).and_then(|id| self.wins.get(id)) {
+                    w.window.set_title(&match text { Some(t) => format!("{} — {t}", w.title), None => w.title.clone() });
+                }
             }
             Event::Place { session, monitor } => {
                 if let Some(w) = self.by_session.get(&session).and_then(|id| self.wins.get(id)) {
@@ -244,12 +295,29 @@ impl ApplicationHandler<Event> for App {
             }
             Event::Close(s) => {
                 if let Some(id) = self.by_session.remove(&s) {
-                    self.wins.remove(&id);
+                    #[cfg_attr(not(windows), allow(unused_variables))]
+                    if let Some(w) = self.wins.remove(&id) {
+                        #[cfg(windows)]
+                        crate::platform::syskeys::unregister(w.hwnd);
+                    }
                     if self.wins.is_empty() && !self.keep_alive { el.exit(); }
                 }
             }
         }
     }
+}
+
+/// HWND de la ventana en Windows (0 en macOS).
+fn native_handle(window: &Window) -> isize {
+    #[cfg(windows)]
+    {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        if let Ok(h) = window.window_handle() {
+            if let RawWindowHandle::Win32(w) = h.as_raw() { return w.hwnd.get(); }
+        }
+    }
+    let _ = window;
+    0
 }
 
 /// Monitor n (desde 1), numerados de izquierda a derecha como en Kast.

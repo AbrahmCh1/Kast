@@ -1,5 +1,7 @@
 //! Plataforma Windows: captura DXGI + H.264 de Media Foundation.
 mod capture;
+pub mod clipboard;
+pub mod syskeys;
 mod color;
 mod input;
 mod mf;
@@ -15,6 +17,19 @@ pub fn init() {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let _ = windows::Win32::System::Console::SetConsoleOutputCP(65001);
     }
+}
+
+/// Carpeta de Descargas del usuario (aunque la haya movido).
+pub fn downloads_dir() -> std::path::PathBuf {
+    use windows::Win32::UI::Shell::{FOLDERID_Downloads, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
+    unsafe {
+        if let Ok(p) = SHGetKnownFolderPath(&FOLDERID_Downloads, KF_FLAG_DEFAULT, None) {
+            let s = p.to_string().unwrap_or_default();
+            windows::Win32::System::Com::CoTaskMemFree(Some(p.0 as *const _));
+            if !s.is_empty() { return s.into(); }
+        }
+    }
+    std::env::var_os("USERPROFILE").map(std::path::PathBuf::from).unwrap_or_else(|| ".".into()).join("Downloads")
 }
 
 /// En Windows capturar la pantalla no requiere permiso.

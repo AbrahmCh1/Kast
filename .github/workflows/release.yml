@@ -39,6 +39,9 @@ jobs:
 
       - name: Probar Kast Link
         shell: pwsh
+        env:
+          # El runner es desechable: se puede probar el portapapeles real.
+          KAST_TEST_CLIPBOARD: "1"
         run: |
           cargo test --release --locked --manifest-path link/Cargo.toml
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -81,6 +84,8 @@ jobs:
           lipo -create -output link/target/universal/kast-link \
             link/target/aarch64-apple-darwin/release/kast-link link/target/x86_64-apple-darwin/release/kast-link
           lipo -archs link/target/universal/kast-link
+          # Pruebas (con el portapapeles real: el runner es desechable).
+          KAST_TEST_CLIPBOARD=1 cargo test --release --locked --manifest-path link/Cargo.toml
 
       - name: Prueba cruzada de Kast Link
         run: |

@@ -11,6 +11,7 @@ mod discovery;
 mod h264;
 mod input;
 mod net;
+mod share;
 mod store;
 mod stream;
 mod viewer;

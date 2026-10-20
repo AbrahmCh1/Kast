@@ -14,7 +14,8 @@ SHOT = sys.argv[2] if len(sys.argv) > 2 else None
 
 class Agent:
     def __init__(self, name, port, home):
-        env = dict(os.environ, KAST_LINK_HOME=home)
+        # Descargas en la carpeta de la prueba (y sin abrir el Explorador / Finder al recibir archivos).
+        env = dict(os.environ, KAST_LINK_HOME=home, KAST_LINK_DOWNLOADS=os.path.join(home, "descargas"))
         self.name = name
         self.p = subprocess.Popen([EXE, "agent", "--port", str(port)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=open(os.path.join(home, "agent.err"), "w"), env=env, text=True, bufsize=1,
@@ -145,6 +146,28 @@ try:
     A.send(cmd="layout_load", path=os.path.join(ha, "no-existe.link"))
     A.wait(state(lambda m: not m["sessions"]))
     print("7) disposiciones: guarda la sesión, la restaura, la mantiene si ya está y la cierra si la disposición no la tiene")
+
+    # Archivos: una carpeta con subcarpeta, de A (visor con control) a las Descargas de B.
+    src = os.path.join(ha, "para-enviar", "Fotos")
+    os.makedirs(os.path.join(src, "sub"))
+    with open(os.path.join(src, "nota.txt"), "w", encoding="utf-8") as f:
+        f.write("hola desde A")
+    big = os.urandom(300_000)
+    with open(os.path.join(src, "sub", "datos.bin"), "wb") as f:
+        f.write(big)
+    A.send(cmd="connect", id=me_b["id"], monitor=1, show_on=9, control=True)
+    s = live_session()
+    if s["control"]:
+        A.send(cmd="send_files", session=s["session"], paths=[src])
+        got = B.wait(lambda m: m.get("ev") == "toast" and "te envió" in m.get("msg", ""), 30)
+        sent = A.wait(lambda m: m.get("ev") == "toast" and "Enviados" in m.get("msg", ""), 30)
+        dl = os.path.join(hb, "descargas", "Fotos")
+        assert open(os.path.join(dl, "nota.txt"), encoding="utf-8").read() == "hola desde A"
+        assert open(os.path.join(dl, "sub", "datos.bin"), "rb").read() == big
+        print(f"8) archivos: «{sent['msg']}» / «{got['msg']}»")
+    else:
+        print("8) archivos: omitido (B no permite el control en este equipo)")
+    hang_up(s)
     print("OK")
 finally:
     for a in (A, B):

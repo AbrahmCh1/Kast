@@ -78,8 +78,10 @@ pub fn serve(ch: &mut Secure, mut src: platform::Source, fps: u32) -> Res<()> {
     }
 }
 
-/// Visor: decodifica los fotogramas en `shared` y avisa con `redraw` tras cada uno.
-pub fn receive(ch: &mut Secure, shared: &Arc<Mutex<viewer::Shared>>, w: usize, h: usize, fps: u32, redraw: &dyn Fn()) -> Res<()> {
+/// Visor: decodifica los fotogramas en `shared` y avisa con `redraw` tras cada uno. Los demás mensajes
+/// (portapapeles…) van a `other`, también si llegan entre los trozos de un fotograma.
+pub fn receive(ch: &mut Secure, shared: &Arc<Mutex<viewer::Shared>>, w: usize, h: usize, fps: u32, redraw: &dyn Fn(),
+               other: &mut dyn FnMut(&[u8])) -> Res<()> {
     let mut dec = platform::Decoder::new(w as u32, h as u32, fps)?;
     let mut m = Vec::new();
     let mut data = Vec::new();
@@ -98,8 +100,11 @@ pub fn receive(ch: &mut Secure, shared: &Arc<Mutex<viewer::Shared>>, w: usize, h
                 data.clear();
                 while data.len() < len {
                     ch.recv(&mut m)?;
-                    if m.first() != Some(&msg::DATA) { return Err("flujo de vídeo corrupto".into()); }
-                    data.extend_from_slice(&m[1..]);
+                    match m.first() {
+                        Some(&msg::DATA) => data.extend_from_slice(&m[1..]),
+                        Some(&(msg::FRAME | msg::CURSOR | msg::HELLO)) | None => return Err("flujo de vídeo corrupto".into()),
+                        Some(_) => other(&m),
+                    }
                 }
                 let t0 = Instant::now();
                 if dec.decode(&data, &mut px)? > 0 {
@@ -120,7 +125,9 @@ pub fn receive(ch: &mut Secure, shared: &Arc<Mutex<viewer::Shared>>, w: usize, h
                 shared.lock().unwrap().cursor = (cx, cy, m[9] != 0);
                 redraw();
             }
-            _ => {}
+            Some(&(msg::FRAME | msg::CURSOR | msg::DATA)) => {}
+            Some(_) => other(&m),
+            None => {}
         }
         st.tick("decodificación", true);
     }

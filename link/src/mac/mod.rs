@@ -24,10 +24,15 @@ use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::time::Duration;
 
+pub mod clipboard;
 mod input;
 pub use input::{Injector, input_allowed, request_input};
 
 pub fn init() {}
+
+pub fn downloads_dir() -> std::path::PathBuf {
+    std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(|| ".".into()).join("Downloads")
+}
 
 const NO_PERMISSION: &str = "Kast no tiene permiso de Grabación de pantalla en este Mac \
     (Ajustes del Sistema → Privacidad y seguridad → Grabación de pantalla). Actívalo y vuelve a abrir Kast";

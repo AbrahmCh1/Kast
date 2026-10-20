@@ -21,6 +21,15 @@ pub mod msg {
     pub const CURSOR: u8 = 4;
     /// visor -> anfitrión: teclado y ratón (ver input.rs)
     pub const INPUT: u8 = 20;
+    /// ambos sentidos (sesión con control): portapapeles, u8 tipo (1 texto UTF-8, 2 PNG) + u32 bytes; siguen CLIP_DATA
+    pub const CLIP: u8 = 30;
+    pub const CLIP_DATA: u8 = 31;
+    /// visor -> anfitrión (sesión con control): archivo, JSON {"id","name" (ruta relativa),"size","last"}
+    pub const FILE: u8 = 32;
+    /// u32 id + trozo del archivo
+    pub const FILE_DATA: u8 = 33;
+    /// u32 id: archivo completo
+    pub const FILE_END: u8 = 34;
     /// visor -> anfitrión: JSON {"name","platform","monitor","control"}
     pub const REQUEST: u8 = 10;
     /// anfitrión -> visor: petición aceptada, JSON {"control": bool, "note": texto} (siguen HELLO y los fotogramas)

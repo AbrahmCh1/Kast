@@ -11,6 +11,7 @@
 //!   {"cmd":"sharing","enabled":true}                   permitir que otros pidan ver mis pantallas
 //!   {"cmd":"layout_save","path":"…\\X.link"}          guardar con una disposición las sesiones a pantalla completa
 //!   {"cmd":"layout_load","path":"…\\X.link"}          restaurarlas (mantiene las que ya coinciden)
+//!   {"cmd":"send_files","session":5,"paths":["…"]}    enviar archivos o carpetas a la sesión (con control)
 //! Agente -> app:
 //!   {"t":"link","ev":"state",…}   estado completo (yo, dispositivos, peticiones, sesiones)
 //!   {"t":"link","ev":"request",…} alguien pide ver mis pantallas (la app debe mostrarse)
@@ -18,7 +19,7 @@
 use crate::discovery::{self, Beacon, Packet};
 use crate::net::{self, Identity, Secure, id_of, msg};
 use crate::store::{self, Saved};
-use crate::{Res, input, platform, stream, viewer};
+use crate::{Res, input, platform, share, stream, viewer};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -79,6 +80,8 @@ struct Sess {
     dev: String,
     show_on: usize,
     want_control: bool,
+    /// "in" con control: envía archivos al otro equipo.
+    files: Option<viewer::FileDrop>,
 }
 
 /// Sesión guardada con una disposición: id, nombre, su pantalla, mi monitor y control.
@@ -212,6 +215,15 @@ impl Agent {
             }
             "disconnect" => self.stop_session(n("session")),
             "layout_save" => self.layout_save(&s("path")),
+            "send_files" => {
+                let paths: Vec<std::path::PathBuf> = v.get("paths").and_then(Value::as_array).into_iter().flatten()
+                    .filter_map(Value::as_str).map(Into::into).collect();
+                let files = self.st.lock().unwrap().sessions.iter().find(|x| x.session == n("session")).and_then(|x| x.files.clone());
+                match files {
+                    Some(f) => f(paths),
+                    None => self.toast("Para enviar archivos hace falta una sesión con control", true),
+                }
+            }
             "layout_load" => {
                 let (a, path) = (self.clone(), s("path"));
                 std::thread::spawn(move || a.layout_load(&path));
@@ -353,7 +365,7 @@ impl Agent {
         if addrs.is_empty() { self.toast(format!("{name} no está disponible"), true); return }
         let session = self.id();
         self.st.lock().unwrap().sessions.push(Sess { session, dir: "in", peer: name.clone(), monitor, state: "connecting", code: String::new(), sock: None,
-                                                     stopped: false, control, dev: id.to_string(), show_on, want_control: control });
+                                                     stopped: false, control, dev: id.to_string(), show_on, want_control: control, files: None });
         self.emit_state();
         let r = self.view(session, id, &addrs, &name, monitor, show_on, control);
         let _ = self.proxy.send_event(viewer::Event::Close(session));
@@ -431,19 +443,24 @@ impl Agent {
         } else {
             format!("Kast Link — {name} · pantalla {monitor}")
         };
-        // Con control, la ventana envía teclado y ratón por un hilo propio (no bloquea la ventana).
-        let input = if control {
+        // Con control, la ventana envía teclado y ratón por un hilo propio (no bloquea la ventana), el
+        // portapapeles se comparte y se pueden arrastrar archivos a la ventana.
+        let (input, files, clip) = if control {
             let (tx, rx) = channel::<Vec<u8>>();
             let mut out = ch.try_clone()?;
             std::thread::spawn(move || { for m in rx { if out.send(&m).is_err() { break; } } });
-            Some(tx)
+            let ctx = tx.clone();
+            let clip = share::ClipSync::start(move |m| ctx.send(m).is_ok());
+            (Some(tx), Some(self.file_drop(session, name, ch.try_clone()?)), Some(clip))
         } else {
-            None
+            (None, None, None)
         };
-        let _ = self.proxy.send_event(viewer::Event::Open { session, shared: shared.clone(), monitor: (show_on > 0).then_some(show_on), title, input });
+        self.set_session(session, |s| s.files = files.clone());
+        let _ = self.proxy.send_event(viewer::Event::Open { session, shared: shared.clone(), monitor: (show_on > 0).then_some(show_on), title, input, files });
         self.set_session(session, |s| s.state = "live");
         let proxy = self.proxy.clone();
-        let r = stream::receive(&mut ch, &shared, w, h, fps, &move || { let _ = proxy.send_event(viewer::Event::Redraw(session)); });
+        let r = stream::receive(&mut ch, &shared, w, h, fps, &move || { let _ = proxy.send_event(viewer::Event::Redraw(session)); },
+                                &mut |m| if let Some(c) = &clip { c.on_message(m) });
         // Cerrar la ventana o pulsar "Desconectar" corta la conexión a propósito: no es un error.
         let stopped = self.st.lock().unwrap().sessions.iter().any(|s| s.session == session && s.stopped);
         match r {
@@ -452,6 +469,42 @@ impl Agent {
             Err(e) if e.downcast_ref::<std::io::Error>().is_some() => { self.toast(format!("{name} terminó la sesión"), false); Ok(()) }
             r => r,
         }
+    }
+
+    /// Envío de archivos de una sesión: en su propio hilo (los datos van intercalados con el teclado y el ratón)
+    /// y con el progreso en el título del visor.
+    fn file_drop(self: &Arc<Self>, session: u64, peer: &str, ch: Secure) -> viewer::FileDrop {
+        let ch = Arc::new(Mutex::new(ch));
+        let busy = Arc::new(AtomicBool::new(false));
+        let (a, peer) = (self.clone(), peer.to_string());
+        Arc::new(move |paths: Vec<std::path::PathBuf>| {
+            if paths.is_empty() { return; }
+            if busy.swap(true, Ordering::SeqCst) {
+                a.toast(format!("Espera a que termine el envío en curso a {peer}"), true);
+                return;
+            }
+            let (a, ch, busy, peer) = (a.clone(), ch.clone(), busy.clone(), peer.clone());
+            std::thread::spawn(move || {
+                let proxy = a.proxy.clone();
+                let status = |t: Option<String>| { let _ = proxy.send_event(viewer::Event::Status { session, text: t }); };
+                match share::send_files(&paths, &mut |m| ch.lock().unwrap().send(m), &status) {
+                    Ok((n, bytes)) => {
+                        let what = format!("{n} archivo{} ({})", if n == 1 { "" } else { "s" }, share::human(bytes));
+                        store::log(&format!("enviados a {peer}: {what}"));
+                        a.toast(format!("Enviados a {peer} (Descargas): {what}"), false);
+                        status(Some(format!("enviados {what} a Descargas ✓")));
+                        std::thread::sleep(Duration::from_secs(4));
+                        status(None);
+                    }
+                    Err(e) => {
+                        status(None);
+                        store::log(&format!("enviar archivos a {peer}: {e}"));
+                        a.toast(format!("No se pudieron enviar los archivos a {peer}: {e}"), true);
+                    }
+                }
+                busy.store(false, Ordering::SeqCst);
+            });
+        })
     }
 
     // ------------------------------------------------------------ otro me ve
@@ -555,26 +608,52 @@ impl Agent {
         let sock = ch.shutdown_handle().ok();
         if let Some(s) = &sock { s.set_read_timeout(None)?; }
         self.st.lock().unwrap().sessions.push(Sess { session, dir: "out", peer: name.clone(), monitor, state: "live", code: ch.code.clone(), sock,
-                                                     stopped: false, control, dev: String::new(), show_on: 0, want_control: control });
+                                                     stopped: false, control, dev: String::new(), show_on: 0, want_control: control, files: None });
         self.emit_state();
         store::log(&format!("{name} empieza a {} la pantalla {monitor}", if control { "controlar" } else { "ver" }));
-        if control {
-            // Teclado y ratón del visor, inyectados en este equipo.
+        // Con control: teclado y ratón del visor inyectados aquí, portapapeles compartido y archivos recibidos.
+        let _clip = if control {
             let (w, h) = src.size();
             let mut inj = platform::Injector::new(monitor, w, h)?;
             let mut rx = ch.try_clone()?;
+            let tx = Mutex::new(ch.try_clone()?);
+            let clip = Arc::new(share::ClipSync::start(move |m| tx.lock().unwrap().send(&m).is_ok()));
             let (viewer, host) = (plat.clone(), store::platform());
+            let (clip2, a, peer) = (clip.clone(), self.clone(), name.clone());
             std::thread::spawn(move || {
                 let mut m = Vec::new();
+                let mut files = share::FileRecv::new();
                 while rx.recv(&mut m).is_ok() {
-                    if m.first() != Some(&msg::INPUT) { continue; }
-                    if let Some(mut e) = input::Event::decode(&m[1..]) {
-                        if let input::Event::Key { code, .. } = &mut e { *code = input::map_modifier(code, &viewer, host); }
-                        inj.apply(e);
+                    match m.first() {
+                        Some(&msg::INPUT) => {
+                            if let Some(mut e) = input::Event::decode(&m[1..]) {
+                                if let input::Event::Key { code, .. } = &mut e { *code = input::map_modifier(code, &viewer, host); }
+                                inj.apply(e);
+                            }
+                        }
+                        Some(&(msg::CLIP | msg::CLIP_DATA)) => clip2.on_message(&m),
+                        Some(&(msg::FILE | msg::FILE_DATA | msg::FILE_END)) => match files.on_message(&m) {
+                            Ok(Some(r)) => {
+                                let what = format!("{} archivo{} ({})", r.count, if r.count == 1 { "" } else { "s" }, share::human(r.bytes));
+                                store::log(&format!("recibidos de {peer}: {what} en {}", r.first.display()));
+                                a.toast(format!("{peer} te envió {what} a Descargas"), false);
+                                share::reveal(&r.first);
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                store::log(&format!("recibir archivos de {peer}: {e}"));
+                                a.toast(format!("No se pudo recibir un archivo de {peer}: {e}"), true);
+                                files = share::FileRecv::new();
+                            }
+                        },
+                        _ => {}
                     }
                 }
             });
-        }
+            Some(clip)
+        } else {
+            None
+        };
         let r = stream::serve(&mut ch, src, FPS);
         self.end_session(session);
         store::log(&format!("sesión con {name} terminada{}", r.err().map(|e| format!(": {e}")).unwrap_or_default()));
