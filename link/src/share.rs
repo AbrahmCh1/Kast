@@ -334,14 +334,11 @@ mod tests {
     fn portapapeles_real() {
         if std::env::var_os("KAST_TEST_CLIPBOARD").is_none() { return; }
         let antes = platform::clipboard::seq();
-        platform::clipboard::set(&Clip::Text("Kast ñ
-línea 2".into()));
+        platform::clipboard::set(&Clip::Text("Kast ñ\nlínea 2".into()));
         assert_ne!(platform::clipboard::seq(), antes);
         match platform::clipboard::get() {
-            Some(Clip::Text(t)) => assert_eq!(t.replace("
-", "
-"), "Kast ñ
-línea 2"),
+            // Windows guarda los saltos de línea como \r\n.
+            Some(Clip::Text(t)) => assert_eq!(t.replace("\r\n", "\n"), "Kast ñ\nlínea 2"),
             _ => panic!("no se leyó el texto"),
         }
         let rgba: Vec<u8> = (0..8 * 6).flat_map(|i| [i as u8 * 5, 100, 200, 255]).collect();
