@@ -375,7 +375,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         }
         /* Alguien pide ver nuestras pantallas: se muestra la ventana para aceptar o rechazar. */
-        if (strstr((char *)lp, "\"ev\":\"request\"")) ui_open();
+        if (strstr((char *)lp, "\"ev\":\"request\"") || strstr((char *)lp, "\"ev\":\"show\"")) ui_open();
         ui_post_json((const char *)lp);
         free((void *)lp);
         return 0;

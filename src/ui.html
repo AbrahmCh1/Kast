@@ -328,6 +328,12 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; m
         <div class="sub" style="text-align:right">Permitir que otros<br>vean mis pantallas</div>
         <label class="switch"><input type="checkbox" id="meSharing"><span></span></label>
       </div>
+      <div class="card row req" id="linkPerm" hidden style="margin-top:12px">
+        <div class="ic dev-ic"><svg class="i"><use href="#i-mon"/></svg></div>
+        <div class="body"><div style="font-weight:600">Para que otros vean tus pantallas, Kast necesita el permiso de Grabación de pantalla</div>
+          <div class="sub">Pulsa «Dar permiso», activa Kast en Ajustes del Sistema → Privacidad y seguridad → Grabación de pantalla, y después cierra Kast (barra de menús → Salir de Kast) y vuelve a abrirlo.</div></div>
+        <button class="btn primary" id="permBtn">Dar permiso</button>
+      </div>
       <div id="linkSessionsWrap" hidden><h2>Sesiones activas</h2><div id="linkSessions" class="list"></div></div>
       <h2>Dispositivos</h2>
       <div id="linkDevices" class="grid dev-grid"></div>
@@ -920,7 +926,7 @@ const platName = p => p === 'mac' ? 'Mac' : p === 'windows' ? 'Windows' : '';
 function onLink(m) {
   if (m.ev === 'missing') { $('#linkMissing').hidden = false; $('#meSub').textContent = 'No disponible'; return; }
   if (m.ev === 'toast') return toast(m.msg, m.err);
-  if (m.ev === 'request') { showTab('dispositivos'); return; }
+  if (m.ev === 'request' || m.ev === 'show') { showTab('dispositivos'); return; }
   if (m.ev !== 'state') return;
   L = m;
   $('#linkMissing').hidden = true;
@@ -951,6 +957,7 @@ function renderLink() {
   $('#meName').textContent = me.name;
   $('#meSub').textContent = `${platName(me.platform)} · ${me.displays.length} pantalla${me.displays.length === 1 ? '' : 's'} · visible en la red`;
   $('#meSharing').checked = me.sharing;
+  $('#linkPerm').hidden = !(me.capture === false && me.sharing);
   $('#nlink').textContent = L.devices.filter(d => d.online).length || '';
 
   // Peticiones (también en un diálogo)
@@ -1026,6 +1033,7 @@ function renderLink() {
   }
 }
 $('#meSharing').onchange = e => linkCmd({ cmd: 'sharing', enabled: e.target.checked });
+$('#permBtn').onclick = () => linkCmd({ cmd: 'request_capture' });
 $('#devAdd').onclick = async () => {
   const ip = await prompt('Agregar dispositivo', 'Dirección IP del otro equipo (en él: Kast → Dispositivos)', '');
   if (ip) linkCmd({ cmd: 'add', addr: ip });

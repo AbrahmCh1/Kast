@@ -26,6 +26,21 @@ use std::time::Duration;
 
 pub fn init() {}
 
+const NO_PERMISSION: &str = "Kast no tiene permiso de Grabación de pantalla en este Mac \
+    (Ajustes del Sistema → Privacidad y seguridad → Grabación de pantalla). Actívalo y vuelve a abrir Kast";
+
+/// Some(false) si falta el permiso de Grabación de pantalla (macOS lo exige para compartir).
+pub fn capture_allowed() -> Option<bool> { Some(objc2_core_graphics::CGPreflightScreenCaptureAccess()) }
+
+/// Pide el permiso (macOS muestra su aviso la primera vez) y abre su panel en Ajustes del Sistema.
+pub fn request_capture() {
+    if !objc2_core_graphics::CGRequestScreenCaptureAccess() {
+        let _ = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+            .spawn();
+    }
+}
+
 fn active_displays() -> Vec<CGDirectDisplayID> {
     let mut ids = [0 as CGDirectDisplayID; 16];
     let mut n = 0u32;
@@ -179,13 +194,14 @@ fn shareable_content() -> Res<Retained<SCShareableContent>> {
     });
     unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&block) };
     let r = rx.recv_timeout(Duration::from_secs(15)).map_err(|_| "ScreenCaptureKit no respondió")?;
-    let p = r.map_err(|e| format!("sin permiso de grabación de pantalla o error de ScreenCaptureKit: {e}"))?;
+    let p = r.map_err(|e| format!("{NO_PERMISSION} ({e})"))?;
     Ok(unsafe { Retained::from_raw(p.0) }.unwrap())
 }
 
 impl Source {
     pub fn new(index: usize, fps: u32, mbps: u32, use_pattern: bool) -> Res<Self> {
         if use_pattern { return Err("--pattern sólo está disponible en Windows".into()); }
+        if capture_allowed() == Some(false) { return Err(NO_PERMISSION.into()); }
         let ids = active_displays();
         let id = *ids.get(index.wrapping_sub(1)).ok_or_else(|| format!("monitor {index} no existe (hay {})", ids.len()))?;
         let (pw, ph) = pixel_size(id);

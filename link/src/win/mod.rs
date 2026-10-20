@@ -14,6 +14,11 @@ pub fn init() {
     }
 }
 
+/// En Windows capturar la pantalla no requiere permiso.
+pub fn capture_allowed() -> Option<bool> { None }
+
+pub fn request_capture() {}
+
 pub fn displays() -> Res<Vec<DisplayInfo>> {
     Ok(capture::outputs()?
         .iter()

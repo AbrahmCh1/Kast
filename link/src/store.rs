@@ -50,6 +50,22 @@ pub fn device_name() -> String {
 
 pub fn platform() -> &'static str { if cfg!(windows) { "windows" } else { "mac" } }
 
+/// Registro de diagnóstico (link.log junto a la configuración; se reinicia con cada arranque del agente).
+pub fn log(msg: &str) {
+    use std::io::Write;
+    eprintln!("{msg}");
+    let p = config_dir().join("link.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let _ = writeln!(f, "[{:02}:{:02}:{:02} UTC] {msg}", secs / 3600 % 24, secs / 60 % 60, secs % 60);
+    }
+}
+
+pub fn log_reset() {
+    let _ = std::fs::create_dir_all(config_dir());
+    let _ = std::fs::write(config_dir().join("link.log"), format!("kast-link {} ({})\n", env!("CARGO_PKG_VERSION"), platform()));
+}
+
 /// Dispositivo recordado.
 #[derive(Clone, Default)]
 pub struct Saved {

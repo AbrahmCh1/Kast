@@ -110,7 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             linkBuf.removeSubrange(linkBuf.startIndex...nl)
             if line.isEmpty { continue }
             // Alguien pide ver nuestras pantallas: se muestra la ventana para aceptar o rechazar.
-            if line.contains("\"ev\":\"request\"") {
+            if line.contains("\"ev\":\"request\"") || line.contains("\"ev\":\"show\"") {
                 openUI()
                 NSApp.requestUserAttention(.criticalRequest)
             }

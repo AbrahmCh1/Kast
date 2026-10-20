@@ -134,7 +134,7 @@ impl Agent {
         let requests: Vec<Value> = st.requests.iter().map(|r| json!({"req": r.req, "name": r.name, "platform": r.platform, "code": r.code, "monitor": r.monitor})).collect();
         let sessions: Vec<Value> = st.sessions.iter().map(|s| json!({"session": s.session, "dir": s.dir, "peer": s.peer, "monitor": s.monitor, "state": s.state, "code": s.code})).collect();
         let me = json!({"id": self.id, "name": self.name, "platform": store::platform(), "port": self.port,
-                        "sharing": self.sharing.load(Ordering::Relaxed),
+                        "sharing": self.sharing.load(Ordering::Relaxed), "capture": platform::capture_allowed(),
                         "displays": self.displays.lock().unwrap().iter().map(|(w, h)| json!([w, h])).collect::<Vec<_>>()});
         drop(st);
         let all: Vec<Value> = devices.into_iter().chain(pending).collect();
@@ -183,6 +183,10 @@ impl Agent {
                 self.emit_state();
             }
             "disconnect" => self.stop_session(n("session")),
+            "request_capture" => {
+                platform::request_capture();
+                self.toast("Activa Kast en «Grabación de pantalla» y después cierra y vuelve a abrir Kast", false);
+            }
             "sharing" => {
                 self.sharing.store(b("enabled"), Ordering::Relaxed);
                 let _ = std::fs::write(settings_path(), format!("sharing={}\n", b("enabled") as u8));
@@ -251,7 +255,7 @@ impl Agent {
         self.end_session(session);
         match r {
             Ok(()) => {}
-            Err(e) => self.toast(format!("{name}: {e}"), true),
+            Err(e) => { store::log(&format!("ver {name}: {e}")); self.toast(format!("{name}: {e}"), true) }
         }
     }
 
@@ -292,8 +296,12 @@ impl Agent {
             }
             self.save(&st);
         }
-        ch.recv(&mut m)?;
-        if m.first() != Some(&msg::HELLO) { return Err("respuesta inesperada".into()); }
+        ch.recv(&mut m).map_err(|_| format!("{name} cerró la conexión al empezar a transmitir (revisa Kast → Dispositivos en ese equipo)"))?;
+        match m.first() {
+            Some(&msg::HELLO) => {}
+            Some(&msg::REJECT) => return Err(String::from_utf8_lossy(&m[1..]).to_string().into()),
+            _ => return Err("respuesta inesperada".into()),
+        }
         let (w, h, fps) = stream::parse_hello(&m[1..]).ok_or("respuesta inesperada")?;
         let shared = Arc::new(Mutex::new(viewer::Shared { frame: vec![0; w * h], w, h, cursor: (0, 0, false) }));
         let title = format!("Kast Link — {name} · pantalla {monitor}");
@@ -319,7 +327,7 @@ impl Agent {
             let a = self.clone();
             std::thread::spawn(move || {
                 let peer = stream.peer_addr().ok();
-                if let Err(e) = a.host(stream, peer) { eprintln!("sesión entrante: {e}"); }
+                if let Err(e) = a.host(stream, peer) { store::log(&format!("sesión entrante: {e}")); }
             });
         }
     }
@@ -336,6 +344,14 @@ impl Agent {
         let monitor = v.get("monitor").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
         if !self.sharing.load(Ordering::Relaxed) {
             ch.send_typed(msg::REJECT, format!("{} no permite ver sus pantallas", self.name).as_bytes())?;
+            return Ok(());
+        }
+        // macOS: sin el permiso de Grabación de pantalla no se puede compartir. Se avisa en los dos lados.
+        if platform::capture_allowed() == Some(false) {
+            store::log(&format!("{name} pidió ver la pantalla {monitor}: falta el permiso de Grabación de pantalla"));
+            self.emit(json!({"t": "link", "ev": "show"}));
+            self.toast(format!("{name} quiso ver tu pantalla, pero Kast no tiene permiso de Grabación de pantalla: pulsa «Dar permiso»"), true);
+            ch.send_typed(msg::REJECT, format!("{} no ha dado a Kast el permiso de Grabación de pantalla", self.name).as_bytes())?;
             return Ok(());
         }
         if monitor > self.displays.lock().unwrap().len().max(1) {
@@ -376,14 +392,25 @@ impl Agent {
                 self.save(&st);
             }
         }
+        // La captura se prepara antes de confirmar: si falla, el otro equipo recibe el motivo.
+        let src = match stream::open(monitor, FPS, MBPS) {
+            Ok(s) => s,
+            Err(e) => {
+                store::log(&format!("no se pudo capturar la pantalla {monitor} para {name}: {e}"));
+                self.toast(format!("No se pudo compartir tu pantalla {monitor}: {e}"), true);
+                ch.send_typed(msg::REJECT, format!("{} no pudo capturar su pantalla: {e}", self.name).as_bytes())?;
+                return Ok(());
+            }
+        };
         ch.send_typed(msg::ACCEPT, &[])?;
         let session = self.id();
         let sock = ch.shutdown_handle().ok();
         self.st.lock().unwrap().sessions.push(Sess { session, dir: "out", peer: name.clone(), monitor, state: "live", code: ch.code.clone(), sock, stopped: false });
         self.emit_state();
-        let r = stream::serve(&mut ch, monitor, FPS, MBPS);
+        store::log(&format!("{name} empieza a ver la pantalla {monitor}"));
+        let r = stream::serve(&mut ch, src, FPS);
         self.end_session(session);
-        if let Err(e) = r { eprintln!("sesión con {name} terminada: {e}"); }
+        store::log(&format!("sesión con {name} terminada{}", r.err().map(|e| format!(": {e}")).unwrap_or_default()));
         Ok(())
     }
 
@@ -458,6 +485,7 @@ impl Agent {
 
 /// Arranca el agente. Termina cuando la app cierra stdin.
 pub fn run(port: u16) -> Res<()> {
+    store::log_reset();
     let el = viewer::event_loop(true)?;
     let proxy = el.create_proxy();
     let me = store::identity();

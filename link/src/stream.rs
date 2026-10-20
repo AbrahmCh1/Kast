@@ -37,9 +37,13 @@ impl Stats {
     }
 }
 
-/// Anfitrión: captura el monitor y lo transmite hasta que se corte la conexión.
-pub fn serve(ch: &mut Secure, monitor: usize, fps: u32, mbps: u32) -> Res<()> {
-    let mut src = platform::Source::new(monitor, fps, mbps, false)?;
+/// Prepara la captura del monitor (antes de aceptar la conexión, para poder explicar si falla).
+pub fn open(monitor: usize, fps: u32, mbps: u32) -> Res<platform::Source> {
+    platform::Source::new(monitor, fps, mbps, false)
+}
+
+/// Anfitrión: transmite el monitor hasta que se corte la conexión.
+pub fn serve(ch: &mut Secure, mut src: platform::Source, fps: u32) -> Res<()> {
     let (w, h) = src.size();
     ch.send_typed(msg::HELLO, &hello_bytes(w, h, fps))?;
     let mut cursor = (i32::MIN, 0, false);
