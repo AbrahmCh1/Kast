@@ -124,6 +124,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: Kast-*
           merge-multiple: true
 
       - name: Publicar release
