@@ -255,9 +255,10 @@ impl Agent {
     }
 
     /// Deja exactamente las sesiones guardadas: mantiene (y recoloca) las que ya están, corta las demás
-    /// de pantalla completa y conecta las que faltan. Sin archivo (disposición antigua) no toca nada.
+    /// de pantalla completa y conecta las que faltan. Sin archivo (disposición sin sesiones o anterior a esta
+    /// función) es una disposición sin pantallas de otros equipos: se cierran las de pantalla completa.
     fn layout_load(self: &Arc<Self>, path: &str) {
-        let Ok(text) = std::fs::read_to_string(path) else { return };
+        let text = std::fs::read_to_string(path).unwrap_or_default();
         let want: Vec<LayoutSess> = text.lines().filter_map(|l| {
             let f: Vec<&str> = l.split('\t').collect();
             (f.len() >= 5).then(|| LayoutSess {

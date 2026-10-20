@@ -139,7 +139,12 @@ try:
     open(empty, "w").close()
     A.send(cmd="layout_load", path=empty)
     A.wait(state(lambda m: not m["sessions"]))
-    print("7) disposiciones: guarda la sesión, la restaura, la mantiene si ya está y la cierra si no está")
+    # Una disposición sin archivo de sesiones (guardada sin otros equipos o antes de esta función) también la cierra.
+    A.send(cmd="layout_load", path=lay)
+    live_session()
+    A.send(cmd="layout_load", path=os.path.join(ha, "no-existe.link"))
+    A.wait(state(lambda m: not m["sessions"]))
+    print("7) disposiciones: guarda la sesión, la restaura, la mantiene si ya está y la cierra si la disposición no la tiene")
     print("OK")
 finally:
     for a in (A, B):
