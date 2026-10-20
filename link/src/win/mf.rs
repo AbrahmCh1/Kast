@@ -43,6 +43,14 @@ fn set_codec(mft: &IMFTransform, key: &GUID, value: u32, boolean: bool) {
     }
 }
 
+/// Baja latencia: el decodificador entrega cada fotograma en cuanto lo tiene, sin acumular.
+fn low_latency(mft: &IMFTransform) {
+    if let Ok(a) = unsafe { mft.GetAttributes() } {
+        let _ = unsafe { a.SetUINT32(&MF_LOW_LATENCY, 1) };
+    }
+    set_codec(mft, &CODECAPI_AVLowLatencyMode, 1, true);
+}
+
 fn new_sample(len: u32) -> Result<IMFSample> {
     unsafe {
         let s = MFCreateSample()?;
@@ -98,7 +106,7 @@ impl Encoder {
             out.SetUINT32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base.0 as u32)?;
             mft.SetOutputType(0, &out, 0)?;
             mft.SetInputType(0, &video_type(&MFVideoFormat_NV12, w, h, fps)?, 0)?;
-            set_codec(&mft, &CODECAPI_AVLowLatencyMode, 1, true);
+            low_latency(&mft);
             set_codec(&mft, &CODECAPI_AVEncCommonRateControlMode, eAVEncCommonRateControlMode_CBR.0 as u32, false);
             set_codec(&mft, &CODECAPI_AVEncMPVGOPSize, fps * 2, false);
             mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
@@ -145,15 +153,17 @@ pub struct Decoder {
     alloc_h: u32,
     buf: Vec<u8>,
     pitch: usize,
+    fps: u32,
+    n: i64,
 }
 
 impl Decoder {
     pub fn new(w: u32, h: u32, fps: u32) -> Result<Self> {
         unsafe {
             let mft: IMFTransform = CoCreateInstance(&CLSID_MSH264DecoderMFT, None, CLSCTX_INPROC_SERVER)?;
-            set_codec(&mft, &CODECAPI_AVLowLatencyMode, 1, true);
+            low_latency(&mft);
             mft.SetInputType(0, &video_type(&MFVideoFormat_H264, w, h, fps)?, 0)?;
-            let mut d = Self { mft, w, h, alloc_h: h, buf: Vec::new(), pitch: w as usize };
+            let mut d = Self { mft, w, h, alloc_h: h, buf: Vec::new(), pitch: w as usize, fps: fps.max(1), n: 0 };
             d.choose_nv12()?;
             d.mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
             d.mft.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
@@ -177,8 +187,8 @@ impl Decoder {
         Err(windows::core::Error::new(MF_E_INVALIDMEDIATYPE, "el decodificador no ofrece NV12"))
     }
 
-    /// Decodifica una unidad de acceso H.264. Devuelve el último fotograma disponible, si hay.
-    pub fn decode(&mut self, h264: &[u8]) -> Result<Option<Decoded<'_>>> {
+    /// Decodifica una unidad de acceso H.264. Devuelve el último fotograma disponible y cuántos salieron.
+    pub fn decode(&mut self, h264: &[u8]) -> Result<(usize, Option<Decoded<'_>>)> {
         let s = new_sample(h264.len() as u32)?;
         unsafe {
             let b = s.GetBufferByIndex(0)?;
@@ -187,13 +197,32 @@ impl Decoder {
             std::ptr::copy_nonoverlapping(h264.as_ptr(), p, h264.len());
             b.Unlock()?;
             b.SetCurrentLength(h264.len() as u32)?;
-            self.mft.ProcessInput(0, &s, 0)?;
+            let dur = 10_000_000 / self.fps as i64;
+            s.SetSampleTime(self.n * dur)?;
+            s.SetSampleDuration(dur)?;
+            self.n += 1;
         }
-        let mut got = false;
+        let mut got = 0;
+        // Si tiene salida pendiente no acepta más entrada: se vacía y se reintenta.
+        loop {
+            match unsafe { self.mft.ProcessInput(0, &s, 0) } {
+                Ok(()) => break,
+                Err(e) if e.code() == MF_E_NOTACCEPTING => {
+                    if self.drain_one()? { got += 1 } else { return Err(e) }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        while self.drain_one()? { got += 1; }
+        Ok((got, (got > 0).then(|| Decoded { data: &self.buf, pitch: self.pitch, uv_offset: self.pitch * self.alloc_h as usize })))
+    }
+
+    /// Saca un fotograma decodificado (si hay) a `self.buf`.
+    fn drain_one(&mut self) -> Result<bool> {
         loop {
             let frame = match pull(&self.mft, self.w * self.alloc_h * 3 / 2) {
                 Ok(Some(f)) => f,
-                Ok(None) => break,
+                Ok(None) => return Ok(false),
                 Err(e) if e.code() == MF_E_TRANSFORM_STREAM_CHANGE => {
                     self.choose_nv12()?;
                     continue;
@@ -216,8 +245,7 @@ impl Decoder {
                     self.pitch = self.w as usize;
                 }
             }
-            got = true;
+            return Ok(true);
         }
-        Ok(got.then(|| Decoded { data: &self.buf, pitch: self.pitch, uv_offset: self.pitch * self.alloc_h as usize }))
     }
 }

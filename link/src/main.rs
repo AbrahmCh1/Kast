@@ -4,29 +4,71 @@
 //!   kast-link host [-m N] [--fps 60] [--mbps 20] [--port 47800] [--bind 0.0.0.0]
 //!   kast-link view <equipo>[:puerto] --key <clave> [-m N]
 //!   kast-link key [--new]                           mostrar / regenerar la clave de este equipo
-mod capture;
-mod color;
-mod mf;
+//!   kast-link record [-m N | --pattern] [--frames 120] <archivo>   grabar un flujo H.264 (pruebas)
+//!   kast-link play <archivo> [--dump imagen.bmp]                   decodificar un flujo grabado (pruebas)
+mod h264;
 mod net;
 mod viewer;
 
+#[cfg(target_os = "macos")]
+mod mac;
+#[cfg(target_os = "macos")]
+use mac as platform;
+#[cfg(windows)]
+mod win;
+#[cfg(windows)]
+use win as platform;
+
 use net::{Secure, msg};
 use std::error::Error;
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-type Res<T> = Result<T, Box<dyn Error>>;
+pub type Res<T> = Result<T, Box<dyn Error>>;
 
 const DEFAULT_PORT: u16 = 47800;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const RECORD_MAGIC: &[u8; 4] = b"KLNK";
+
+/// Monitor de este equipo (numerados de izquierda a derecha, como en Kast).
+pub struct DisplayInfo {
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+}
+
+/// Fotograma codificado en H.264 Annex B.
+pub struct Encoded {
+    pub data: Vec<u8>,
+    /// Momento de la captura (µs desde 1970), para medir la latencia.
+    pub ts_us: u64,
+    /// Tiempo de captura + codificación en este equipo.
+    pub work_ms: f32,
+}
+
+pub fn now_us() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_micros() as u64).unwrap_or(0) }
+
+/// Patrón de prueba sintético (BGRA): barras de color en movimiento y un cuadrado que rebota.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn pattern(n: u64, w: usize, h: usize, bgra: &mut [u8]) {
+    const BARS: [[u8; 3]; 8] = [[255, 255, 255], [0, 255, 255], [255, 255, 0], [0, 255, 0], [255, 0, 255], [0, 0, 255], [255, 0, 0], [40, 40, 40]];
+    let shift = (n as usize * 4) % w;
+    let (sq, sx, sy) = (h / 6, (n as usize * 7) % (w - h / 6), (n as usize * 5) % (h - h / 6));
+    for y in 0..h {
+        for x in 0..w {
+            let c = if x >= sx && x < sx + sq && y >= sy && y < sy + sq { [0, 0, 0] } else { BARS[((x + shift) % w) * 8 / w] };
+            let p = (y * w + x) * 4;
+            bgra[p..p + 4].copy_from_slice(&[c[0], c[1], c[2], 255]);
+        }
+    }
+}
 
 fn main() {
-    unsafe {
-        use windows::Win32::UI::HiDpi::*;
-        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        let _ = windows::Win32::System::Console::SetConsoleOutputCP(65001);
-    }
+    platform::init();
     if let Err(e) = run() {
         eprintln!("error: {e}");
         std::process::exit(1);
@@ -40,12 +82,13 @@ struct Opts {
 
 impl Opts {
     fn parse() -> Self {
+        const SWITCHES: [&str; 2] = ["--new", "--pattern"];
         let mut pos = Vec::new();
         let mut flags = Vec::new();
         let mut it = std::env::args().skip(1);
         while let Some(a) = it.next() {
             if a.starts_with('-') {
-                let v = if a == "--new" { String::new() } else { it.next().unwrap_or_default() };
+                let v = if SWITCHES.contains(&a.as_str()) { String::new() } else { it.next().unwrap_or_default() };
                 flags.push((a, v));
             } else {
                 pos.push(a);
@@ -64,12 +107,18 @@ impl Opts {
 fn run() -> Res<()> {
     let o = Opts::parse();
     match o.pos.first().map(String::as_str) {
-        Some("list") => list(),
+        Some("list") => {
+            for (i, d) in platform::displays()?.iter().enumerate() {
+                println!("{}  {}  {}x{}  en {},{}", i + 1, d.name, d.w, d.h, d.x, d.y);
+            }
+            Ok(())
+        }
         Some("host") => host(&o),
         Some("view") => view(&o),
+        Some("record") => record(&o),
+        Some("play") => play(&o),
         Some("key") => {
-            let k = load_key(o.get(&["--new"]).is_some())?;
-            println!("{}", net::key_hex(&k));
+            println!("{}", net::key_hex(&load_key(o.get(&["--new"]).is_some())?));
             Ok(())
         }
         Some("version") | Some("--version") => { println!("kast-link {VERSION}"); Ok(()) }
@@ -81,6 +130,8 @@ fn run() -> Res<()> {
             println!("  kast-link view <equipo>[:puerto] --key <clave> [-m N]");
             println!("                                                   ver; con -m N, a pantalla completa en el monitor N");
             println!("  kast-link key [--new]                            clave de este equipo (la pide el visor)");
+            println!("  kast-link record [-m N | --pattern] [--frames 120] <archivo>   grabar un flujo (pruebas)");
+            println!("  kast-link play <archivo> [--dump imagen.bmp]     decodificar un flujo grabado (pruebas)");
             println!("\nEn el visor: Esc cierra, F11 alterna pantalla completa.");
             Ok(())
         }
@@ -88,11 +139,15 @@ fn run() -> Res<()> {
 }
 
 fn key_path() -> std::path::PathBuf {
-    let base = std::env::var_os("APPDATA").map(std::path::PathBuf::from).unwrap_or_else(|| ".".into());
-    base.join("Kast").join("link.key")
+    #[cfg(windows)]
+    let base = std::env::var_os("APPDATA").map(std::path::PathBuf::from).unwrap_or_else(|| ".".into()).join("Kast");
+    #[cfg(not(windows))]
+    let base = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(|| ".".into())
+        .join("Library/Application Support/Kast");
+    base.join("link.key")
 }
 
-/// Clave del anfitrión: se genera una vez y se guarda en %APPDATA%\Kast\link.key.
+/// Clave del anfitrión: se genera una vez y se guarda junto a la configuración de Kast.
 fn load_key(regenerate: bool) -> Res<net::Key> {
     let p = key_path();
     if !regenerate {
@@ -106,14 +161,37 @@ fn load_key(regenerate: bool) -> Res<net::Key> {
     Ok(k)
 }
 
-fn list() -> Res<()> {
-    for (i, o) in capture::outputs()?.iter().enumerate() {
-        println!("{}  {}  {}x{}  en {},{}", i + 1, o.name.trim_start_matches(r"\\.\"), o.w, o.h, o.x, o.y);
-    }
-    Ok(())
+fn hello_bytes(w: u32, h: u32, fps: u32) -> Vec<u8> {
+    let mut v = Vec::with_capacity(12);
+    for x in [w, h, fps] { v.extend_from_slice(&x.to_be_bytes()); }
+    v
 }
 
-fn now_us() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_micros() as u64).unwrap_or(0) }
+fn parse_hello(b: &[u8]) -> Option<(usize, usize, u32)> {
+    if b.len() < 12 { return None; }
+    let rd = |i: usize| u32::from_be_bytes(b[i..i + 4].try_into().unwrap());
+    Some((rd(0) as usize, rd(4) as usize, rd(8)))
+}
+
+struct Stats {
+    t: Instant,
+    frames: u32,
+    bytes: usize,
+    work: f64,
+    lat: f64,
+}
+
+impl Stats {
+    fn new() -> Self { Self { t: Instant::now(), frames: 0, bytes: 0, work: 0.0, lat: 0.0 } }
+    fn tick(&mut self, label: &str, latency: bool) {
+        let el = self.t.elapsed().as_secs_f64();
+        if el < 2.0 { return; }
+        let f = self.frames.max(1) as f64;
+        let lat = if latency { format!("  latencia {:5.1} ms", self.lat / f) } else { String::new() };
+        println!("{:5.1} fps  {:6.2} Mbps  {label} {:4.1} ms{lat}", self.frames as f64 / el, self.bytes as f64 * 8.0 / el / 1e6, self.work / f);
+        *self = Self::new();
+    }
+}
 
 // ---------------------------------------------------------------- anfitrión
 
@@ -124,97 +202,56 @@ fn host(o: &Opts) -> Res<()> {
     let mbps: u32 = o.num(&["--mbps"], 20).clamp(1, 500);
     let port: u16 = o.num(&["--port"], DEFAULT_PORT);
     let bind = o.get(&["--bind"]).unwrap_or("0.0.0.0").to_string();
-    let outs = capture::outputs()?;
-    let out = outs.get(n.wrapping_sub(1)).ok_or_else(|| format!("monitor {n} no existe (hay {})", outs.len()))?;
     let listener = TcpListener::bind((bind.as_str(), port))?;
-    mf::startup()?;
-    println!("kast-link {VERSION}: compartiendo el monitor {n} ({}x{}) en {bind}:{port}, {fps} fps, {mbps} Mbps", out.w, out.h);
+    println!("kast-link {VERSION}: compartiendo el monitor {n} en {bind}:{port}, {fps} fps, {mbps} Mbps");
     println!("clave: {}", net::key_hex(&key));
     loop {
         let (stream, addr) = listener.accept()?;
         println!("conexión de {addr}");
-        match serve(stream, &key, out, fps, mbps) {
+        match serve(stream, &key, n, fps, mbps) {
             Ok(()) => println!("visor desconectado"),
             Err(e) => println!("sesión terminada: {e}"),
         }
     }
 }
 
-fn serve(stream: TcpStream, key: &net::Key, out: &capture::Output, fps: u32, mbps: u32) -> Res<()> {
+fn serve(stream: TcpStream, key: &net::Key, monitor: usize, fps: u32, mbps: u32) -> Res<()> {
     let mut ch = Secure::accept(stream, key)?;
-    let mut cap = capture::Capturer::new(out)?;
-    // El primer AcquireNextFrame siempre trae la imagen completa del escritorio.
-    let mut first = None;
-    for _ in 0..50 {
-        if let Some(f) = cap.next(100)? { first = Some((f.data.to_vec(), f.pitch)); break; }
-    }
-    let (mut last, mut pitch) = first.ok_or("no se pudo capturar el monitor")?;
-    let (w, h) = ((cap.w & !1) as usize, (cap.h & !1) as usize);
+    let mut src = platform::Source::new(monitor, fps, mbps, false)?;
+    let (w, h) = src.size();
     let mut hello = vec![msg::HELLO];
-    for v in [w as u32, h as u32, fps] { hello.extend_from_slice(&v.to_be_bytes()); }
+    hello.extend_from_slice(&hello_bytes(w, h, fps));
     ch.send(&hello)?;
-
-    let mut enc = mf::Encoder::new(w as u32, h as u32, fps, mbps * 1_000_000)?;
-    let mut nv12 = vec![0u8; w * h * 3 / 2];
-    let period = Duration::from_secs_f64(1.0 / fps as f64);
-    let mut next = Instant::now();
+    println!("transmitiendo {w}x{h}");
     let mut cursor = (i32::MIN, 0, false);
-    let mut pending = true;   // hay imagen nueva sin codificar
-    let mut refine = 0;       // fotogramas extra al quedarse quieta la pantalla (mejoran la nitidez)
-    let (mut st_t, mut st_frames, mut st_bytes, mut st_conv, mut st_enc) = (Instant::now(), 0u32, 0usize, 0f64, 0f64);
-
+    let mut st = Stats::new();
     loop {
-        let wait = next.saturating_duration_since(Instant::now()).as_millis() as u32;
-        if let Some(f) = cap.next(wait.max(1))? {
-            last.clear();
-            last.extend_from_slice(f.data);
-            pitch = f.pitch;
-            pending = true;
-            refine = 3;
-        }
-        if Instant::now() < next { continue; }
-        next += period;
-        if Instant::now() > next + period * 4 { next = Instant::now() + period; }
-
-        if pending || refine > 0 {
-            if !pending { refine -= 1; }
-            pending = false;
-            let t0 = Instant::now();
-            color::bgra_to_nv12(&last, pitch, w, h, &mut nv12);
-            let t1 = Instant::now();
-            let data = enc.encode(&nv12)?;
-            let t2 = Instant::now();
-            if !data.is_empty() {
+        match src.next()? {
+            Some(f) => {
+                cursor = src.cursor();
                 let mut hdr = vec![msg::FRAME];
-                hdr.extend_from_slice(&now_us().to_be_bytes());
-                hdr.extend_from_slice(&cap.cursor.0.to_be_bytes());
-                hdr.extend_from_slice(&cap.cursor.1.to_be_bytes());
-                hdr.push(cap.cursor.2 as u8);
-                hdr.extend_from_slice(&(data.len() as u32).to_be_bytes());
+                hdr.extend_from_slice(&f.ts_us.to_be_bytes());
+                hdr.extend_from_slice(&cursor.0.to_be_bytes());
+                hdr.extend_from_slice(&cursor.1.to_be_bytes());
+                hdr.push(cursor.2 as u8);
+                hdr.extend_from_slice(&(f.data.len() as u32).to_be_bytes());
                 ch.send(&hdr)?;
-                ch.send_chunks(&data)?;
-                cursor = cap.cursor;
-                st_frames += 1;
-                st_bytes += data.len();
-                st_conv += (t1 - t0).as_secs_f64();
-                st_enc += (t2 - t1).as_secs_f64();
+                ch.send_chunks(&f.data)?;
+                st.frames += 1;
+                st.bytes += f.data.len();
+                st.work += f.work_ms as f64;
             }
-        } else if cap.cursor != cursor {
-            cursor = cap.cursor;
-            let mut m = vec![msg::CURSOR];
-            m.extend_from_slice(&cursor.0.to_be_bytes());
-            m.extend_from_slice(&cursor.1.to_be_bytes());
-            m.push(cursor.2 as u8);
-            ch.send(&m)?;
+            None if src.cursor() != cursor => {
+                cursor = src.cursor();
+                let mut m = vec![msg::CURSOR];
+                m.extend_from_slice(&cursor.0.to_be_bytes());
+                m.extend_from_slice(&cursor.1.to_be_bytes());
+                m.push(cursor.2 as u8);
+                ch.send(&m)?;
+            }
+            None => {}
         }
-
-        let el = st_t.elapsed().as_secs_f64();
-        if el >= 2.0 {
-            let f = st_frames.max(1) as f64;
-            println!("{:5.1} fps  {:6.2} Mbps  conversión {:4.1} ms  codificación {:4.1} ms",
-                     st_frames as f64 / el, st_bytes as f64 * 8.0 / el / 1e6, st_conv / f * 1e3, st_enc / f * 1e3);
-            (st_t, st_frames, st_bytes, st_conv, st_enc) = (Instant::now(), 0, 0, 0.0, 0.0);
-        }
+        st.tick("captura+codificación", false);
     }
 }
 
@@ -231,9 +268,8 @@ fn view(o: &Opts) -> Res<()> {
     let mut ch = Secure::connect(stream, &key)?;
     let mut m = Vec::new();
     ch.recv(&mut m)?;
-    if m.len() < 13 || m[0] != msg::HELLO { return Err("respuesta inesperada del anfitrión".into()); }
-    let rd = |i: usize| u32::from_be_bytes(m[i..i + 4].try_into().unwrap());
-    let (w, h, fps) = (rd(1) as usize, rd(5) as usize, rd(9));
+    if m.first() != Some(&msg::HELLO) { return Err("respuesta inesperada del anfitrión".into()); }
+    let (w, h, fps) = parse_hello(&m[1..]).ok_or("respuesta inesperada del anfitrión")?;
     println!("conectado a {addr}: {w}x{h} a {fps} fps (cifrado)");
 
     let shared = Arc::new(Mutex::new(viewer::Shared { frame: vec![0; w * h], w, h, cursor: (0, 0, false) }));
@@ -252,12 +288,11 @@ fn view(o: &Opts) -> Res<()> {
 
 fn receive(mut ch: Secure, shared: Arc<Mutex<viewer::Shared>>, proxy: &winit::event_loop::EventLoopProxy<viewer::Event>,
            w: usize, h: usize, fps: u32) -> Res<()> {
-    mf::startup()?;
-    let mut dec = mf::Decoder::new(w as u32, h as u32, fps)?;
+    let mut dec = platform::Decoder::new(w as u32, h as u32, fps)?;
     let mut m = Vec::new();
     let mut data = Vec::new();
     let mut px = vec![0u32; w * h];
-    let (mut st_t, mut st_frames, mut st_bytes, mut st_dec, mut st_lat) = (Instant::now(), 0u32, 0usize, 0f64, 0f64);
+    let mut st = Stats::new();
     loop {
         ch.recv(&mut m)?;
         match m.first() {
@@ -275,18 +310,17 @@ fn receive(mut ch: Secure, shared: Arc<Mutex<viewer::Shared>>, proxy: &winit::ev
                     data.extend_from_slice(&m[1..]);
                 }
                 let t0 = Instant::now();
-                if let Some(f) = dec.decode(&data)? {
-                    color::nv12_to_xrgb(f.data, f.pitch, f.uv_offset, w, h, &mut px);
+                if dec.decode(&data, &mut px)? > 0 {
                     let mut s = shared.lock().unwrap();
                     std::mem::swap(&mut s.frame, &mut px);
                     s.cursor = (cx, cy, vis);
                     drop(s);
                     let _ = proxy.send_event(viewer::Event::Redraw);
-                    st_frames += 1;
-                    st_dec += t0.elapsed().as_secs_f64();
-                    st_lat += now_us().saturating_sub(ts) as f64 / 1000.0;
+                    st.frames += 1;
+                    st.work += t0.elapsed().as_secs_f64() * 1e3;
+                    st.lat += now_us().saturating_sub(ts) as f64 / 1000.0;
                 }
-                st_bytes += len;
+                st.bytes += len;
             }
             Some(&msg::CURSOR) if m.len() >= 10 => {
                 let cx = i32::from_be_bytes(m[1..5].try_into()?);
@@ -296,12 +330,85 @@ fn receive(mut ch: Secure, shared: Arc<Mutex<viewer::Shared>>, proxy: &winit::ev
             }
             _ => {}
         }
-        let el = st_t.elapsed().as_secs_f64();
-        if el >= 2.0 {
-            let f = st_frames.max(1) as f64;
-            println!("{:5.1} fps  {:6.2} Mbps  decodificación {:4.1} ms  latencia {:5.1} ms",
-                     st_frames as f64 / el, st_bytes as f64 * 8.0 / el / 1e6, st_dec / f * 1e3, st_lat / f);
-            (st_t, st_frames, st_bytes, st_dec, st_lat) = (Instant::now(), 0, 0, 0.0, 0.0);
+        st.tick("decodificación", true);
+    }
+}
+
+// ---------------------------------------------------------------- pruebas: grabar / reproducir
+
+/// Formato: "KLNK" + ancho, alto, fps (u32 BE) + repetido { u32 BE longitud, H.264 Annex B }.
+fn record(o: &Opts) -> Res<()> {
+    let path = o.pos.get(1).ok_or("uso: kast-link record [-m N | --pattern] [--frames 120] <archivo>")?;
+    let frames: usize = o.num(&["--frames"], 120);
+    let fps: u32 = o.num(&["--fps"], 30);
+    let mut src = platform::Source::new(o.num(&["-m", "--monitor"], 1), fps, o.num(&["--mbps"], 8), o.get(&["--pattern"]).is_some())?;
+    let (w, h) = src.size();
+    let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
+    f.write_all(RECORD_MAGIC)?;
+    f.write_all(&hello_bytes(w, h, fps))?;
+    let (mut n, start) = (0, Instant::now());
+    while n < frames {
+        // Si la pantalla no cambia no hay fotogramas nuevos (sobre todo en macOS): se acepta una grabación parcial.
+        if start.elapsed() > Duration::from_secs(30) {
+            if n == 0 { return Err("no se capturó ningún fotograma en 30 s".into()); }
+            println!("la pantalla apenas cambió: se detiene en {n} fotogramas");
+            break;
+        }
+        if let Some(e) = src.next()? {
+            f.write_all(&(e.data.len() as u32).to_be_bytes())?;
+            f.write_all(&e.data)?;
+            n += 1;
         }
     }
+    f.flush()?;
+    println!("grabados {n} fotogramas de {w}x{h} en {path}");
+    Ok(())
+}
+
+fn play(o: &Opts) -> Res<()> {
+    let path = o.pos.get(1).ok_or("uso: kast-link play <archivo> [--dump imagen.bmp]")?;
+    let mut f = std::io::BufReader::new(std::fs::File::open(path)?);
+    let mut hdr = [0u8; 16];
+    f.read_exact(&mut hdr)?;
+    if &hdr[..4] != RECORD_MAGIC { return Err("no es un archivo de kast-link record".into()); }
+    let (w, h, fps) = parse_hello(&hdr[4..]).unwrap();
+    let mut dec = platform::Decoder::new(w as u32, h as u32, fps)?;
+    let mut px = vec![0u32; w * h];
+    let (mut total, mut decoded, mut data) = (0, 0, Vec::new());
+    let t0 = Instant::now();
+    loop {
+        let mut len = [0u8; 4];
+        if f.read_exact(&mut len).is_err() { break; }
+        data.resize(u32::from_be_bytes(len) as usize, 0);
+        f.read_exact(&mut data)?;
+        total += 1;
+        let got = dec.decode(&data, &mut px)?;
+        decoded += got;
+        if std::env::var_os("KAST_LINK_TRACE").is_some() { eprintln!("entrada {total}: {got} fotograma(s), {} bytes", data.len()); }
+    }
+    let ms = t0.elapsed().as_secs_f64() * 1e3 / decoded.max(1) as f64;
+    let (mut r, mut g, mut b) = (0u64, 0u64, 0u64);
+    for p in &px { r += (*p >> 16 & 0xFF) as u64; g += (*p >> 8 & 0xFF) as u64; b += (*p & 0xFF) as u64; }
+    let n = (w * h).max(1) as u64;
+    println!("{decoded}/{total} fotogramas decodificados ({w}x{h}, {ms:.1} ms cada uno); color medio del último: {} {} {}", r / n, g / n, b / n);
+    if let Some(bmp) = o.get(&["--dump"]) {
+        write_bmp(bmp, &px, w, h)?;
+        println!("último fotograma guardado en {bmp}");
+    }
+    if decoded == 0 { return Err("no se decodificó ningún fotograma".into()); }
+    Ok(())
+}
+
+fn write_bmp(path: &str, px: &[u32], w: usize, h: usize) -> Res<()> {
+    let size = 54 + w * h * 4;
+    let mut b = Vec::with_capacity(size);
+    b.extend_from_slice(b"BM");
+    for v in [size as u32, 0, 54, 40, w as u32] { b.extend_from_slice(&v.to_le_bytes()); }
+    b.extend_from_slice(&(-(h as i32)).to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&32u16.to_le_bytes());
+    for v in [0u32, (w * h * 4) as u32, 2835, 2835, 0, 0] { b.extend_from_slice(&v.to_le_bytes()); }
+    for p in px { b.extend_from_slice(&(p | 0xFF00_0000).to_le_bytes()); }
+    std::fs::write(path, b)?;
+    Ok(())
 }

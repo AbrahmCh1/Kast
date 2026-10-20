@@ -43,6 +43,8 @@ jobs:
           cargo build --release --locked --manifest-path link/Cargo.toml
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           ./link/target/release/kast-link.exe version
+          ./link/target/release/kast-link.exe play link/testdata/patron-windows.klnk
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - name: Empaquetar
         shell: pwsh
@@ -68,6 +70,50 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Compilar Kast Link (universal)
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release --locked --manifest-path link/Cargo.toml --target "$t"
+          done
+          mkdir -p link/target/universal
+          lipo -create -output link/target/universal/kast-link \
+            link/target/aarch64-apple-darwin/release/kast-link link/target/x86_64-apple-darwin/release/kast-link
+          lipo -archs link/target/universal/kast-link
+
+      - name: Prueba cruzada de Kast Link
+        run: |
+          L=link/target/universal/kast-link
+          mkdir -p link-pruebas
+          "$L" list
+          # Flujo H.264 generado por Media Foundation en Windows -> decodificado con VideoToolbox.
+          "$L" play link/testdata/patron-windows.klnk --dump link-pruebas/windows-en-mac.bmp
+          # Captura con ScreenCaptureKit + codificación VideoToolbox (requiere permiso de grabación de pantalla).
+          if "$L" record -m 1 --frames 60 link-pruebas/mac.klnk; then
+            "$L" play link-pruebas/mac.klnk --dump link-pruebas/mac-en-mac.bmp
+          else
+            echo "::warning::sin captura de pantalla en el runner (permiso de grabación)"
+          fi
+          # En vivo: anfitrión y visor en la misma Mac.
+          KEY="$("$L" key)"
+          "$L" host -m 1 --bind 127.0.0.1 > link-pruebas/host.log 2>&1 &
+          HOST=$!
+          sleep 3
+          "$L" view 127.0.0.1 --key "$KEY" > link-pruebas/view.log 2>&1 &
+          VIEW=$!
+          sleep 10
+          screencapture -x link-pruebas/en-vivo.png || true
+          kill $VIEW $HOST 2>/dev/null || true
+          echo "--- anfitrión"; cat link-pruebas/host.log
+          echo "--- visor"; cat link-pruebas/view.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: link-pruebas-macos
+          path: link-pruebas/
+          if-no-files-found: ignore
 
       - name: Compilar
         run: |

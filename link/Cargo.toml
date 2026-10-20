@@ -21,6 +21,18 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Variant", "Win32_System_Ole", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_System_Console",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+dispatch2 = "0.3.1"
+objc2 = "0.6.5"
+objc2-core-foundation = "0.3.2"
+objc2-core-graphics = "0.3.2"
+objc2-core-media = "0.3.2"
+objc2-core-video = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2-screen-capture-kit = "0.3.2"
+objc2-video-toolbox = "0.3.2"
+
 [profile.release]
 opt-level = 3
 lto = true

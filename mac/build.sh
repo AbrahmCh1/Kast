@@ -24,6 +24,10 @@ SHORT="$(printf '%s' "$VERSION" | sed -E 's/^([0-9]+(\.[0-9]+)*).*/\1/')"
 sed -e "s/__VERSION__/$VERSION/g" -e "s/__SHORT__/$SHORT/g" Info.plist > "$APP/Contents/Info.plist"
 cp ../src/ui.html "$APP/Contents/Resources/ui.html"
 cp ../kast.ini "$APP/Contents/Resources/kast.ini"
+# Kast Link (opcional): binario universal compilado antes con cargo (ver el workflow).
+if [ -f ../link/target/universal/kast-link ]; then
+  cp ../link/target/universal/kast-link "$APP/Contents/MacOS/kast-link"
+fi
 
 ICONSET="$BUILD/Kast.iconset"
 mkdir -p "$ICONSET"

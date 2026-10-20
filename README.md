@@ -139,6 +139,14 @@ kast-link view 192.168.1.20 --key <clave> -m 3     # a pantalla completa en el m
 
 En el visor, `Esc` cierra y `F11` alterna pantalla completa. La primera vez, Windows pedirá permiso en el firewall para el puerto 47800.
 
+**Windows y macOS se entienden entre sí**: cualquiera puede compartir y cualquiera puede ver. En Mac, `kast-link` va dentro de la app (`/Applications/Kast.app/Contents/MacOS/kast-link`) y, para compartir, macOS pedirá el permiso de **Grabación de pantalla** para la Terminal.
+
+| | Windows | macOS |
+|---|---|---|
+| Captura | DXGI Desktop Duplication | ScreenCaptureKit (NV12 directo de la GPU) |
+| H.264 | Media Foundation | VideoToolbox (hardware) |
+| Formato en la red | Annex B | AVCC ↔ Annex B, con el SPS ajustado a latencia mínima |
+
 | Medido en red local (1080p, 60 fps) | |
 |---|---|
 | Captura + codificación H.264 | ~4 ms por fotograma |
@@ -147,8 +155,8 @@ En el visor, `Esc` cierra y `F11` alterna pantalla completa. La primera vez, Win
 | Ancho de banda (escritorio) | 2-5 Mbps; hasta `--mbps` con vídeo |
 
 - **Seguridad:** Noise (X25519 + ChaCha20-Poly1305) con una clave de 256 bits propia de cada equipo (`kast-link key`, `--new` para cambiarla). Sin la clave no se puede ni ver ni conectar.
-- **Todo nativo:** captura DXGI y H.264 de Media Foundation (incluidos en Windows), sin códecs ni librerías externas. Escrito en Rust.
-- **Hoja de ruta:** control de teclado y ratón con cruce transparente entre monitores, pantallas virtuales (equipos sin monitor), anfitrión en macOS (ScreenCaptureKit + VideoToolbox), varias pantallas a la vez y asignación desde la interfaz de Kast.
+- **Todo nativo:** las APIs de captura y vídeo que ya trae cada sistema, sin códecs ni librerías externas. Escrito en Rust.
+- **Hoja de ruta:** control de teclado y ratón con cruce transparente entre monitores, pantallas virtuales (equipos sin monitor), varias pantallas a la vez y asignación desde la interfaz de Kast.
 
 Compilar: `cargo build --release --manifest-path link/Cargo.toml` (con el toolchain MSVC, o GNU con las binutils de MinGW-w64).
 
