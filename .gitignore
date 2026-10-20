@@ -5,3 +5,4 @@ bin/
 *.obj
 .zig-cache/
 zig-out/
+mac/build/

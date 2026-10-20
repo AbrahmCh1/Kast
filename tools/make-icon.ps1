@@ -101,3 +101,5 @@ $dir = Join-Path $PSScriptRoot '..\assets'
 New-Item -ItemType Directory -Force $dir | Out-Null
 [IO.File]::WriteAllBytes((Join-Path $dir 'kast.ico'), $out.ToArray())
 [IO.File]::WriteAllBytes((Join-Path $dir 'kast-256.png'), $pngs[-1])
+# Icono de macOS (build.sh genera el .icns a partir de éste)
+[IO.File]::WriteAllBytes((Join-Path $dir 'kast-1024.png'), (Draw 1024))

@@ -2,7 +2,9 @@
 
 <h1 align="center">Kast</h1>
 
-<p align="center">Control de monitores para Windows: brillo, contraste, entradas, resolución y disposición,<br>desde la bandeja, con atajos globales y una interfaz moderna. Escrito en C puro.</p>
+<p align="center">Control de monitores para <b>Windows</b> y <b>macOS</b>: brillo, contraste, entradas, resolución y disposición,<br>desde la bandeja o la barra de menús, con atajos globales y una interfaz moderna.</p>
+
+<p align="center"><a href="https://github.com/AbrahmCh1/Kast/releases">Descargar</a> · <a href="#windows">Windows</a> · <a href="#macos">macOS</a></p>
 
 <p align="center"><img src="assets/screenshot.png" width="760" alt="Interfaz de Kast"></p>
 
@@ -17,6 +19,8 @@
 - **Atajos globales** configurables, grabados pulsando la combinación.
 - **Cambios seguros**: resolución, rotación, duplicar y disposiciones se revierten solos a los 15 s si no se confirman.
 - **CLI completa** (`kast.exe`) para scripts.
+
+# Windows
 
 ## Ligero de verdad
 
@@ -84,17 +88,55 @@ VY279HGR = 10 85
 
 > `Ctrl + Alt` equivale a `AltGr`: evita combinaciones que uses para escribir.
 
+# macOS
+
+<p align="center"><img src="assets/screenshot-macos.png" width="640" alt="Kast en macOS"></p>
+
+App nativa en Swift que vive en la **barra de menús**: control de brillo por monitor directamente en el menú, favoritos, extender/duplicar y la misma ventana de configuración que en Windows (WKWebView, creada sólo al abrirla). Binario universal (Apple Silicon e Intel), macOS 12 o posterior.
+
+## Instalar
+
+1. Descarga `Kast-<versión>-macos.zip` de [Releases](https://github.com/AbrahmCh1/Kast/releases), descomprímelo y mueve **Kast.app** a *Aplicaciones*.
+2. La app no está firmada por Apple: la primera vez, **clic derecho → Abrir** (o `xattr -dr com.apple.quarantine /Applications/Kast.app`).
+3. Para usar la CLI desde la terminal:
+
+```bash
+sudo ln -sf /Applications/Kast.app/Contents/MacOS/Kast /usr/local/bin/kast
+```
+
+Los comandos, favoritos, atajos y la calibración son los mismos que en Windows. La configuración vive en `~/Library/Application Support/Kast/kast.ini`. Los atajos usan `ctrl`, `alt` (⌥), `shift` y `cmd` (⌘), y no requieren permisos de accesibilidad.
+
+## Qué funciona en macOS
+
+| Función | Estado |
+|---|---|
+| Brillo de la pantalla integrada | ✓ |
+| Brillo, contraste, volumen y entrada de monitores externos (DDC/CI) | ✓ en Apple Silicon · ✗ en Macs Intel |
+| Resolución, frecuencia y monitor principal | ✓ |
+| Extender / duplicar, disposiciones guardadas | ✓ |
+| Favoritos, atajos globales, inicio con la sesión | ✓ |
+| Rotar o desactivar monitores | ✗ (macOS no lo permite con API pública) |
+
+## Compilar
+
+```bash
+bash mac/build.sh 1.0.0    # genera mac/build/Kast.app (requiere Xcode o Command Line Tools)
+```
+
 ## Estructura
 
 ```
-src/core.c     monitores, DDC/CI, comandos y configuración (compartido)
-src/cli.c      kast.exe
-src/daemon.c   kastd.exe: bandeja, atajos y cola de trabajo
-src/webui.c    ventana WebView2 alojada en C (COM a mano)
-src/ui.html    interfaz (embebida como recurso)
-tools/         generador del icono
-third_party/   SDK de WebView2 (licencia BSD de Microsoft)
+src/core.c      Windows: monitores, DDC/CI, comandos y configuración
+src/cli.c       Windows: kast.exe
+src/daemon.c    Windows: kastd.exe (bandeja, atajos y cola de trabajo)
+src/webui.c     Windows: ventana WebView2 alojada en C (COM a mano)
+src/ui.html     interfaz compartida por Windows y macOS
+mac/Sources/    macOS: app de la barra de menús en Swift (mismo lenguaje de comandos)
+tools/          generador del icono
+third_party/    SDK de WebView2 (licencia BSD de Microsoft)
 ```
+
+Las versiones se publican automáticamente al subir una etiqueta `v*`: GitHub Actions compila ambos sistemas y adjunta los paquetes al Release.
 
 ## Licencia
 

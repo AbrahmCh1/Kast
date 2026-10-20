@@ -1,4 +1,5 @@
-# Compila Kast en cada push/PR y publica un Release al subir una etiqueta v* (p. ej. v1.0.0).
+# Compila Kast para Windows y macOS en cada push/PR y publica un Release al subir una etiqueta v*
+# (p. ej. v1.1.0). Las versiones con guion (v1.1.0-beta.1) se publican como prerelease.
 name: Build & Release
 
 on:
@@ -16,7 +17,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -56,12 +57,80 @@ jobs:
             dist/${{ env.PKG }}.zip
             dist/${{ env.PKG }}.zip.sha256
 
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compilar
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then V="${GITHUB_REF_NAME#v}"; else V="dev-${GITHUB_SHA::7}"; fi
+          bash mac/build.sh "$V"
+          BIN=mac/build/Kast.app/Contents/MacOS/Kast
+          test "$("$BIN" version)" = "kast $V"
+          lipo -archs "$BIN"
+          codesign --verify --verbose mac/build/Kast.app
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+
+      - name: Prueba de humo
+        run: |
+          BIN=mac/build/Kast.app/Contents/MacOS/Kast
+          "$BIN" help | head -2
+          "$BIN" list || echo "(sin DDC en el runner)"
+          "$BIN" modes p | head -3 || true
+          "$BIN" layout save ci-prueba
+          "$BIN" layout list | grep -qx ci-prueba
+          "$BIN" layout del ci-prueba
+          "$BIN" fav
+          open mac/build/Kast.app
+          sleep 6
+          pgrep -x Kast
+          "$BIN" status
+          "$BIN" ui
+          sleep 6
+          screencapture -x mac/build/captura.png
+          pgrep -x Kast
+          "$BIN" stop
+          sleep 3
+          ! pgrep -x Kast
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: captura-macos
+          path: mac/build/captura.png
+          if-no-files-found: ignore
+
+      - name: Empaquetar
+        run: |
+          NAME="Kast-$VERSION-macos"
+          mkdir -p dist
+          ditto -c -k --keepParent mac/build/Kast.app "dist/$NAME.zip"
+          (cd dist && shasum -a 256 "$NAME.zip" > "$NAME.zip.sha256")
+          echo "PKG=$NAME" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG }}
+          path: |
+            dist/${{ env.PKG }}.zip
+            dist/${{ env.PKG }}.zip.sha256
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
       - name: Publicar release
-        if: github.ref_type == 'tag'
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $pre = if ($env:VERSION -match '-') { '--prerelease' } else { $null }
-          gh release create $env:GITHUB_REF_NAME "dist/$env:PKG.zip" "dist/$env:PKG.zip.sha256" `
-            --title "Kast $env:VERSION" --generate-notes $pre
+          PRE=""
+          [[ "$GITHUB_REF_NAME" == *-* ]] && PRE="--prerelease"
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "Kast ${GITHUB_REF_NAME#v}" --generate-notes $PRE

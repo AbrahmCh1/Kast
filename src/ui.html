@@ -37,7 +37,7 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 nav { display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; background: var(--side); }
 .brand { display: flex; align-items: center; gap: 11px; padding: 4px 8px 20px; }
 .brand .logo { width: 34px; height: 34px; flex: none; filter: drop-shadow(0 3px 8px rgba(67,97,238,.35)); }
-.brand b { display: block; font: 600 16px/1.2 "Segoe UI Variable Display", "Segoe UI", sans-serif; }
+.brand b { display: block; font: 600 16px/1.2 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; }
 .brand small { display: block; font-size: 11.5px; color: var(--sub); }
 .nav, .btn, .seg button, .mbox { transition: background .12s, border-color .12s, color .12s, transform .12s, box-shadow .12s; }
 button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -59,7 +59,7 @@ section { display: none; max-width: 1020px; animation: in .18s ease-out; }
 section.active { display: block; }
 @keyframes in { from { opacity: 0; transform: translateY(6px); } }
 .head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
-h1 { margin: 0; font: 600 28px/1.2 "Segoe UI Variable Display", "Segoe UI", sans-serif; }
+h1 { margin: 0; font: 600 28px/1.2 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; }
 h2 { margin: 26px 0 10px; font-size: 14px; font-weight: 600; }
 .desc { color: var(--sub); margin: -10px 0 18px; }
 
@@ -86,7 +86,7 @@ h2 { margin: 26px 0 10px; font-size: 14px; font-weight: 600; }
 .mbox { position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; border-radius: 8px; border: 1px solid var(--stroke); cursor: default; overflow: hidden;
   background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 12%, var(--card2)), var(--card2) 70%); box-shadow: inset 0 0 0 3px var(--card2); }
 .mbox:hover { border-color: var(--accent); transform: translateY(-1px); }
-.mbox .n { font: 600 24px/1.1 "Segoe UI Variable Display", "Segoe UI"; }
+.mbox .n { font: 600 24px/1.1 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; }
 .mbox .nm { font-size: 11.5px; font-weight: 600; max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mbox .res { font-size: 11px; color: var(--sub); }
 .mbox.primary { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent), inset 0 0 0 4px var(--card2); }
@@ -150,7 +150,7 @@ select:focus, input[type=text]:focus, textarea:focus { border-bottom: 2px solid 
 .item .code { color: var(--sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .empty { padding: 34px; text-align: center; color: var(--sub); }
 
-kbd { display: inline-block; min-width: 24px; padding: 1px 7px; border-radius: 4px; border: 1px solid var(--stroke); border-bottom-width: 2px; background: var(--field); font: 600 12px "Segoe UI", sans-serif; text-align: center; }
+kbd { display: inline-block; min-width: 24px; padding: 1px 7px; border-radius: 4px; border: 1px solid var(--stroke); border-bottom-width: 2px; background: var(--field); font: 600 12px "Segoe UI", system-ui, sans-serif; text-align: center; }
 .combo { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .combo .plus { color: var(--faint); font-size: 11px; }
 
@@ -184,7 +184,7 @@ pre.out { margin: 10px 0 0; padding: 10px 12px; border-radius: 6px; background: 
 .toast { position: fixed; left: 50%; top: 16px; transform: translate(-50%, -20px); margin-left: 114px; padding: 9px 16px; border-radius: 8px; background: var(--bg); border: 1px solid var(--stroke); box-shadow: var(--shadow); opacity: 0; transition: .2s; z-index: 9; max-width: 560px; white-space: pre-wrap; pointer-events: none; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast.err { border-color: color-mix(in srgb, var(--danger) 50%, transparent); }
-.toast .ti { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: 9px; border-radius: 50%; background: var(--ok); color: #fff; font: 700 11px "Segoe UI"; vertical-align: -3px; }
+.toast .ti { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: 9px; border-radius: 50%; background: var(--ok); color: #fff; font: 700 11px "Segoe UI", system-ui, sans-serif; vertical-align: -3px; }
 .toast.err .ti { background: var(--danger); }
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.32); display: grid; place-items: center; z-index: 8; animation: fade .12s; }
 @keyframes fade { from { opacity: 0; } }
@@ -192,7 +192,7 @@ pre.out { margin: 10px 0 0; padding: 10px 12px; border-radius: 6px; background: 
 .dlg { width: min(540px, 92vw); border-radius: 8px; background: var(--bg); border: 1px solid var(--stroke); box-shadow: var(--shadow); overflow: hidden; animation: pop .16s ease-out; }
 @keyframes pop { from { transform: scale(.96); opacity: 0; } }
 .dlg .content { padding: 22px 24px; display: flex; flex-direction: column; gap: 12px; }
-.dlg h3 { margin: 0; font: 600 19px "Segoe UI Variable Display", "Segoe UI"; }
+.dlg h3 { margin: 0; font: 600 19px "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; }
 .dlg p { margin: 0; }
 .dlg .foot { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 24px; background: var(--card2); border-top: 1px solid var(--stroke); }
 .dlg .foot .btn { min-width: 110px; justify-content: center; }
@@ -286,7 +286,7 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; m
     <section id="tab-atajos">
       <div class="head"><h1>Atajos</h1><div class="grow"></div>
         <button class="btn primary" id="hkNew"><svg class="i"><use href="#i-plus"/></svg>Añadir atajo</button></div>
-      <p class="desc">Haz clic en un atajo y pulsa la combinación nueva. Funcionan en todo Windows.<br>
+      <p class="desc" id="hkDesc">Haz clic en un atajo y pulsa la combinación nueva. Funcionan en todo Windows.<br>
         Ojo: <b>Ctrl + Alt equivale a AltGr</b>; evita combinaciones que uses para escribir (en tu teclado, AltGr + Q es @).</p>
       <div class="list" id="hks"></div>
       <div class="log" id="hkLog" style="margin-top:14px"></div>
@@ -296,7 +296,7 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; m
       <div class="head"><h1>Ajustes</h1></div>
       <div class="list">
         <div class="card row">
-          <div class="body"><div class="name" style="font-weight:600">Iniciar con Windows</div><div class="sub">Kast arranca en la bandeja al iniciar sesión.</div></div>
+          <div class="body"><div class="name" style="font-weight:600" id="autostartTitle">Iniciar con Windows</div><div class="sub" id="autostartSub">Kast arranca en la bandeja al iniciar sesión.</div></div>
           <label class="switch"><input type="checkbox" id="autostart"><span></span></label>
         </div>
         <div class="card row">
@@ -329,6 +329,16 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; m
 <script>
 'use strict';
 if (window.KAST && KAST.mica) document.documentElement.classList.add('mica');
+const MAC = window.KAST?.platform === 'mac';
+if (MAC) {
+  /* macOS: sin rotación, sin desactivar monitores ni la opción de Windows del puntero */
+  document.documentElement.classList.add('mac');
+  document.querySelector('#vanish').closest('.card').hidden = true;
+  document.querySelector('#autostartTitle').textContent = 'Iniciar con macOS';
+  document.querySelector('#autostartSub').textContent = 'Kast arranca en la barra de menús al iniciar sesión.';
+  document.querySelector('#hkDesc').innerHTML = 'Haz clic en un atajo y pulsa la combinación nueva. Funcionan en todo macOS.<br>' +
+    'Modificadores: ⌃ Control, ⌥ Opción, ⇧ Mayúsculas y ⌘ Comando. Evita combinaciones que ya usa el sistema.';
+}
 if (window.KAST && KAST.version) document.querySelector('.ver').textContent = `Kast ${KAST.version} · código abierto (MIT)`;
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -501,11 +511,11 @@ function renderMons() {
         <label class="field">Entrada<select data-k="in"${m.in === null ? ' disabled' : ''}>${m.in === null ? '<option>—</option>' : inOpts}</select></label>
         <label class="field">Resolución<select data-k="mode">${modes.map(v => `<option value="${v}"${v === cur ? ' selected' : ''}>${modeLabel(v)}</option>`).join('')}</select></label>
       </div>
-      <div class="field">Rotación<div class="seg">${[0, 90, 180, 270].map(d => `<button data-rot="${d}" class="${m.rot === d ? 'on' : ''}">${d}°</button>`).join('')}</div></div>
+      ${MAC ? '' : `<div class="field">Rotación<div class="seg">${[0, 90, 180, 270].map(d => `<button data-rot="${d}" class="${m.rot === d ? 'on' : ''}">${d}°</button>`).join('')}</div></div>`}
       ${ddc || !m.primary ? `<div class="mon-f">
         ${ddc ? `<button class="btn subtle${cal[m.name] ? ' on' : ''}" data-a="cal" title="Igualar el brillo con los demás monitores">${icon('sun')}${cal[m.name] ? 'Calibrado' : 'Calibrar'}</button>` : ''}
         ${m.primary ? '' : `<button class="btn subtle" data-a="primary" title="Usar como pantalla principal">${icon('star')}Hacer principal</button>
-          <button class="btn subtle" data-a="disable" title="Desactivar este monitor">${icon('power')}Desactivar</button>`}
+          ${MAC ? '' : `<button class="btn subtle" data-a="disable" title="Desactivar este monitor">${icon('power')}Desactivar</button>`}`}
       </div>` : ''}
     </div>`);
     $$('input[type=range]', c).forEach(r => {
@@ -701,7 +711,7 @@ function codeToKey(code) {
   if (/^F([1-9]|1\d|2[0-4])$/.test(code)) return code.toLowerCase();
   return CODES[code];
 }
-const NICE = { ctrl: 'Ctrl', alt: 'Alt', shift: 'Shift', win: 'Win', up: '↑', down: '↓', left: '←', right: '→', pgup: 'RePág', pgdn: 'AvPág', home: 'Inicio',
+const NICE = { ...(MAC ? { ctrl: '⌃', alt: '⌥', shift: '⇧', cmd: '⌘', win: '⌘' } : { ctrl: 'Ctrl', alt: 'Alt', shift: 'Shift', win: 'Win', cmd: 'Win' }), up: '↑', down: '↓', left: '←', right: '→', pgup: 'RePág', pgdn: 'AvPág', home: 'Inicio',
   end: 'Fin', ins: 'Insert', del: 'Supr', space: 'Espacio', tab: 'Tab', enter: 'Enter', esc: 'Esc', pause: 'Pausa', scroll: 'Bloq Despl', plus: '+', minus: '-',
   comma: ',', period: '.', numplus: 'Num +', numminus: 'Num -', nummul: 'Num *', numdiv: 'Num /' };
 const keyNice = k => NICE[k] || (/^num\d$/.test(k) ? 'Num ' + k[3] : /^f\d+$/.test(k) ? k.toUpperCase() : k.toUpperCase());
@@ -722,11 +732,11 @@ function endCapture(v) {
 window.addEventListener('keydown', e => {
   if (!capturing) return;
   e.preventDefault(); e.stopImmediatePropagation();
-  const mods = [e.ctrlKey && 'ctrl', e.altKey && 'alt', e.shiftKey && 'shift', e.metaKey && 'win'].filter(Boolean);
+  const mods = [e.ctrlKey && 'ctrl', e.altKey && 'alt', e.shiftKey && 'shift', e.metaKey && (MAC ? 'cmd' : 'win')].filter(Boolean);
   if (['Control', 'Alt', 'Shift', 'Meta', 'OS'].includes(e.key)) { capturing.btn.innerHTML = mods.length ? comboHtml(mods.join('+')) + '<span class="plus"> + …</span>' : '<span>Pulsa la combinación…</span>'; return; }
   if (e.code === 'Escape' && !mods.length) return endCapture(null);
   const k = codeToKey(e.code) || (/^[a-z0-9]$/i.test(e.key) ? e.key.toLowerCase() : null); if (!k) return;
-  if (!mods.length && !/^f\d+$/.test(k)) { capturing.btn.innerHTML = '<span class="warn">Usa al menos Ctrl, Alt, Shift o Win</span>'; return; }
+  if (!mods.length && !/^f\d+$/.test(k)) { capturing.btn.innerHTML = `<span class="warn">Usa al menos ${MAC ? '⌃, ⌥, ⇧ o ⌘' : 'Ctrl, Alt, Shift o Win'}</span>`; return; }
   endCapture([...mods, k].join('+'));
 }, true);
 window.addEventListener('keyup', e => { if (capturing) { e.preventDefault(); e.stopImmediatePropagation(); } }, true);
