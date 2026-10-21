@@ -14,6 +14,9 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
     private let barBg = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
     private var modeButton: UIButton!
     private let toast = UILabel()
+    /// Modo vertical: trackpad y botones debajo de la pantalla remota.
+    private let controls = UIView(), pad = UIView()
+    private var controlsTop: NSLayoutConstraint!
     private var cancellables = Set<AnyCancellable>()
 
     /// Tamaño de la imagen remota (píxeles).
@@ -45,6 +48,7 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         keys.keyBar.host = host
         view.addSubview(keys)
         setupWaiting()
+        setupControls()
         setupBar()
         setupGestures()
         client.sink = video
@@ -64,8 +68,28 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        controls.isHidden = !portrait
+        if portrait {
+            let a = portraitArea
+            if controlsTop.constant != a.maxY + 10 { controlsTop.constant = a.maxY + 10 }
+        }
         layoutVideo()
     }
+
+    /// En vertical (con control) la pantalla remota va arriba y debajo el trackpad con sus botones.
+    private var portrait: Bool {
+        view.bounds.height > view.bounds.width && client.session?.state == "live" && client.session?.control == true
+    }
+
+    private var portraitArea: CGRect {
+        let top = view.safeAreaInsets.top + 52
+        let w = view.bounds.width
+        let h = rw > 0 ? min(w * CGFloat(rh) / CGFloat(rw), view.bounds.height * 0.45) : view.bounds.height * 0.3
+        return CGRect(x: 0, y: top, width: w, height: h)
+    }
+
+    /// Zona donde se muestra (y se puede ampliar) la pantalla remota.
+    private var area: CGRect { portrait ? portraitArea : view.bounds }
 
     private func update(_ s: Session?) {
         guard let s else { return }
@@ -82,6 +106,7 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         }
         cursor.isHidden = !(s.state == "live" && s.control)
         modeButton.isHidden = !s.control
+        view.setNeedsLayout()
     }
 
     /// Avisos (portapapeles, notas de la sesión) sobre el vídeo.
@@ -108,6 +133,68 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
             UIView.animate(withDuration: 0.2) { self.toast.alpha = 1 }
             UIView.animate(withDuration: 0.4, delay: 2.6) { self.toast.alpha = 0 }
         }.store(in: &cancellables)
+    }
+
+    private func setupControls() {
+        controls.isHidden = true
+        controls.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(controls)
+        pad.backgroundColor = UIColor(white: 0.13, alpha: 1)
+        pad.layer.cornerRadius = 18
+        pad.layer.borderColor = UIColor(white: 1, alpha: 0.08).cgColor
+        pad.layer.borderWidth = 1
+        let hint = UILabel()
+        hint.text = "Desliza para mover el cursor\nToca = clic · Dos dedos = desplazar · Mantén = arrastrar"
+        hint.numberOfLines = 0
+        hint.textAlignment = .center
+        hint.font = .preferredFont(forTextStyle: .footnote)
+        hint.textColor = UIColor(white: 1, alpha: 0.35)
+        hint.translatesAutoresizingMaskIntoConstraints = false
+        pad.addSubview(hint)
+        let left = mouseButton("Clic izquierdo", 0), right = mouseButton("Clic derecho", 1)
+        let buttons = UIStackView(arrangedSubviews: [left, right])
+        buttons.spacing = 10
+        buttons.distribution = .fillEqually
+        [pad, buttons].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; controls.addSubview($0) }
+        controlsTop = controls.topAnchor.constraint(equalTo: view.topAnchor, constant: 300)
+        let padHeight = pad.heightAnchor.constraint(greaterThanOrEqualToConstant: 120)
+        padHeight.priority = .defaultLow
+        NSLayoutConstraint.activate([
+            controlsTop,
+            controls.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            controls.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            controls.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8),
+            pad.topAnchor.constraint(equalTo: controls.topAnchor),
+            pad.leadingAnchor.constraint(equalTo: controls.leadingAnchor),
+            pad.trailingAnchor.constraint(equalTo: controls.trailingAnchor),
+            pad.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -10), padHeight,
+            buttons.leadingAnchor.constraint(equalTo: controls.leadingAnchor),
+            buttons.trailingAnchor.constraint(equalTo: controls.trailingAnchor),
+            buttons.bottomAnchor.constraint(equalTo: controls.bottomAnchor),
+            buttons.heightAnchor.constraint(equalToConstant: 56),
+            hint.centerXAnchor.constraint(equalTo: pad.centerXAnchor), hint.centerYAnchor.constraint(equalTo: pad.centerYAnchor),
+            hint.widthAnchor.constraint(lessThanOrEqualTo: pad.widthAnchor, constant: -32),
+        ])
+    }
+
+    /// Botón del ratón: se puede mantener pulsado (p. ej. para arrastrar moviendo el cursor con el trackpad).
+    private func mouseButton(_ title: String, _ button: UInt8) -> UIButton {
+        var c = UIButton.Configuration.filled()
+        c.title = title
+        c.baseBackgroundColor = UIColor(white: 0.2, alpha: 1)
+        c.baseForegroundColor = .white
+        c.cornerStyle = .large
+        let b = UIButton(configuration: c)
+        b.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            self.client.button(button, true, Int(self.cx), Int(self.cy))
+        }, for: .touchDown)
+        b.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            self.client.button(button, false, Int(self.cx), Int(self.cy))
+        }, for: [.touchUpInside, .touchUpOutside, .touchCancel])
+        return b
     }
 
     private func setupWaiting() {
@@ -187,16 +274,17 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
 
     /// Rectángulo (en la vista) donde se dibuja la imagen remota con el zoom actual.
     private var videoRect: CGRect {
-        guard rw > 0, rh > 0 else { return view.bounds }
-        let fit = AVMakeRect(aspectRatio: CGSize(width: rw, height: rh), insideRect: view.bounds)
+        guard rw > 0, rh > 0 else { return area }
+        let fit = AVMakeRect(aspectRatio: CGSize(width: rw, height: rh), insideRect: area)
         let w = fit.width * zoom, h = fit.height * zoom
         return CGRect(x: fit.midX - w / 2 + offset.x, y: fit.midY - h / 2 + offset.y, width: w, height: h)
     }
 
     private func clampOffset() {
         guard rw > 0 else { return }
-        let fit = AVMakeRect(aspectRatio: CGSize(width: rw, height: rh), insideRect: view.bounds)
-        let mx = max(0, (fit.width * zoom - view.bounds.width) / 2), my = max(0, (fit.height * zoom - view.bounds.height) / 2)
+        let a = area
+        let fit = AVMakeRect(aspectRatio: CGSize(width: rw, height: rh), insideRect: a)
+        let mx = max(0, (fit.width * zoom - a.width) / 2), my = max(0, (fit.height * zoom - a.height) / 2)
         offset.x = min(mx, max(-mx, offset.x))
         offset.y = min(my, max(-my, offset.y))
     }
@@ -204,7 +292,15 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
     private func layoutVideo() {
         clampOffset()
         video.frame = videoRect
+        video.layer.mask = nil
+        if portrait {
+            let m = CALayer()
+            m.backgroundColor = UIColor.black.cgColor
+            m.frame = view.convert(area, to: video)
+            video.layer.mask = m
+        }
         placeCursor()
+        cursor.isHidden = client.session?.control != true || !area.insetBy(dx: -2, dy: -2).contains(toView(cx, cy))
     }
 
     private func resetZoom() {
@@ -232,9 +328,9 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
     /// Con zoom, la vista sigue al cursor para que no salga de la pantalla.
     private func follow() {
         guard zoom > 1.01 else { return }
-        let p = toView(cx, cy), m: CGFloat = 60, b = view.bounds
-        if p.x < m { offset.x += m - p.x } else if p.x > b.width - m { offset.x -= p.x - (b.width - m) }
-        if p.y < m { offset.y += m - p.y } else if p.y > b.height - m { offset.y -= p.y - (b.height - m) }
+        let p = toView(cx, cy), m: CGFloat = 40, b = area
+        if p.x < b.minX + m { offset.x += b.minX + m - p.x } else if p.x > b.maxX - m { offset.x -= p.x - (b.maxX - m) }
+        if p.y < b.minY + m { offset.y += b.minY + m - p.y } else if p.y > b.maxY - m { offset.y -= p.y - (b.maxY - m) }
         layoutVideo()
     }
 
@@ -249,6 +345,9 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
     private let tap1 = UITapGestureRecognizer(), tap2 = UITapGestureRecognizer(), secondary = UITapGestureRecognizer()
     private let pan1 = UIPanGestureRecognizer(), pan2 = UIPanGestureRecognizer(), scroll = UIPanGestureRecognizer()
     private let pinch = UIPinchGestureRecognizer(), hold = UILongPressGestureRecognizer(), hover = UIHoverGestureRecognizer()
+    /// Panel de trackpad del modo vertical: siempre trackpad, sin zoom.
+    private let padTap = UITapGestureRecognizer(), padTap2 = UITapGestureRecognizer(), padPan = UIPanGestureRecognizer()
+    private let padHold = UILongPressGestureRecognizer(), padScroll = UIPanGestureRecognizer()
     private var lastPan = CGPoint.zero, lastHold = CGPoint.zero, last2 = CGPoint.zero, startZoom: CGFloat = 1
     private enum Two { case none, scroll, zoom }
     private var two = Two.none
@@ -275,9 +374,27 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         scroll.maximumNumberOfTouches = 0
         scroll.addTarget(self, action: #selector(onScroll))
         hover.addTarget(self, action: #selector(onHover))
+        // Sólo el puntero de un ratón o trackpad (en iOS reciente el dedo también "flota" y movía el cursor).
+        hover.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
         for g in [tap1, tap2, secondary, pan1, pan2, pinch, hold, scroll, hover] as [UIGestureRecognizer] {
             g.delegate = self
             view.addGestureRecognizer(g)
+        }
+        padTap.addTarget(self, action: #selector(onTap))
+        padTap2.numberOfTouchesRequired = 2
+        padTap2.addTarget(self, action: #selector(onTwoFingerTap))
+        padPan.maximumNumberOfTouches = 1
+        padPan.addTarget(self, action: #selector(onPan))
+        padHold.minimumPressDuration = 0.35
+        padHold.allowableMovement = 12
+        padHold.addTarget(self, action: #selector(onHold))
+        padPan.require(toFail: padHold)
+        padScroll.minimumNumberOfTouches = 2
+        padScroll.maximumNumberOfTouches = 2
+        padScroll.addTarget(self, action: #selector(onPadScroll))
+        for g in [padTap, padTap2, padPan, padHold, padScroll] as [UIGestureRecognizer] {
+            g.delegate = self
+            pad.addGestureRecognizer(g)
         }
     }
 
@@ -286,10 +403,15 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        // Los botones de la barra y del aviso de espera no son gestos sobre la pantalla remota.
-        !(touch.view is UIControl) && client.session?.state == "live" && client.session?.control == true
-            || (g == pinch || g == pan2) && client.session?.state == "live"
+        // Los botones (barra, clic izquierdo/derecho, aviso de espera) no son gestos sobre la pantalla remota,
+        // y lo que se toca en el panel de trackpad sólo lo atienden sus propios gestos.
+        if touch.view is UIControl { return false }
+        if g.view === view, let v = touch.view, v.isDescendant(of: controls) { return false }
+        return client.session?.state == "live" && client.session?.control == true || (g == pinch || g == pan2) && client.session?.state == "live"
     }
+
+    /// Trackpad: el del modo elegido o, siempre, el panel del modo vertical.
+    private func isTrackpad(_ g: UIGestureRecognizer) -> Bool { trackpad || g.view === pad }
 
     private func click(_ button: UInt8, at p: CGPoint) {
         client.button(button, true, Int(p.x), Int(p.y))
@@ -297,25 +419,26 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
     }
 
     @objc private func onTap(_ g: UITapGestureRecognizer) {
-        if !trackpad { moveCursor(to: toRemote(g.location(in: view))) }
+        if !isTrackpad(g) { moveCursor(to: toRemote(g.location(in: view))) }
         click(0, at: CGPoint(x: cx, y: cy))
     }
 
     @objc private func onTwoFingerTap(_ g: UITapGestureRecognizer) {
-        if !trackpad || g == secondary { moveCursor(to: toRemote(g.location(in: view))) }
+        if !isTrackpad(g) || g == secondary { moveCursor(to: toRemote(g.location(in: view))) }
         click(1, at: CGPoint(x: cx, y: cy))
     }
 
     /// Un dedo: trackpad mueve el cursor (con aceleración); táctil arrastra con el botón pulsado.
     @objc private func onPan(_ g: UIPanGestureRecognizer) {
         let p = g.location(in: view)
-        if trackpad {
+        if isTrackpad(g) {
             if g.state == .began { lastPan = p; return }
             let d = CGPoint(x: p.x - lastPan.x, y: p.y - lastPan.y)
             lastPan = p
             let v = g.velocity(in: view), speed = hypot(v.x, v.y)
             let accel = 1 + min(speed / 900, 1.8)
-            let k = CGFloat(rw) / max(videoRect.width, 1) * zoom * accel
+            // En el panel, cruzarlo de lado a lado recorre la pantalla remota entera (sin zoom).
+            let k = CGFloat(rw) / max(g.view === pad ? pad.bounds.width : videoRect.width / zoom, 1) * accel
             moveCursor(to: CGPoint(x: min(CGFloat(rw - 1), max(0, cx + d.x * k)), y: min(CGFloat(rh - 1), max(0, cy + d.y * k))))
             follow()
         } else {
@@ -331,7 +454,7 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
     /// Mantener pulsado: trackpad arrastra desde el cursor; táctil hace clic derecho.
     @objc private func onHold(_ g: UILongPressGestureRecognizer) {
         let p = g.location(in: view)
-        if !trackpad {
+        if !isTrackpad(g) {
             if g.state == .began { moveCursor(to: toRemote(p)); click(1, at: CGPoint(x: cx, y: cy)) }
             return
         }
@@ -341,7 +464,7 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             client.button(0, true, Int(cx), Int(cy))
         case .changed:
-            let k = CGFloat(rw) / max(videoRect.width, 1) * zoom
+            let k = CGFloat(rw) / max(g.view === pad ? pad.bounds.width : videoRect.width / zoom, 1)
             moveCursor(to: CGPoint(x: min(CGFloat(rw - 1), max(0, cx + (p.x - lastHold.x) * k)), y: min(CGFloat(rh - 1), max(0, cy + (p.y - lastHold.y) * k))))
             lastHold = p
             follow()
@@ -374,6 +497,13 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         default:
             if pan2.state != .changed && pinch.state != .changed { two = .none }
         }
+    }
+
+    @objc private func onPadScroll(_ g: UIPanGestureRecognizer) {
+        if g.state == .began { wheelRest = .zero }
+        let t = g.translation(in: pad)
+        g.setTranslation(.zero, in: pad)
+        wheel(dx: -t.x, dy: t.y)
     }
 
     @objc private func onScroll(_ g: UIPanGestureRecognizer) {
