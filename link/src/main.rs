@@ -115,11 +115,16 @@ fn probe(o: &Opts) -> Res<()> {
         return Err("no se pudo iniciar el cliente".into());
     }
     let id = CString::new(format!("ip:{addr}"))?;
-    let _session = unsafe { mobile::kl_connect(id.as_ptr(), o.num(&["-m", "--monitor"], 1), true) };
+    let session = unsafe { mobile::kl_connect(id.as_ptr(), o.num(&["-m", "--monitor"], 1), true) };
     let t0 = Instant::now();
-    let mut sent = false;
+    let (mut sent, mut asked) = (false, 0);
     while t0.elapsed() < Duration::from_secs(secs) {
         std::thread::sleep(Duration::from_millis(200));
+        // Pide fotogramas clave como la app (con la pantalla quieta, macOS no manda otros por su cuenta).
+        if FRAMES.load(Ordering::Relaxed) > 0 && t0.elapsed() > Duration::from_secs(4 + 4 * asked) && asked < 2 {
+            mobile::kl_keyframe(session);
+            asked += 1;
+        }
         let live = *LIVE.lock().unwrap();
         if let (Some(s), false) = (live, sent) {
             if FRAMES.load(Ordering::Relaxed) > 0 {
@@ -132,6 +137,7 @@ fn probe(o: &Opts) -> Res<()> {
     let (n, k) = (FRAMES.load(Ordering::Relaxed), KEYFRAMES.load(Ordering::Relaxed));
     println!("probe: {n} fotogramas ({k} con SPS/PPS)");
     if n == 0 || k == 0 { return Err("no llegó vídeo utilizable".into()); }
+    if k < 2 { return Err("no llegaron los fotogramas clave pedidos".into()); }
     Ok(())
 }
 

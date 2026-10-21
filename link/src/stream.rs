@@ -1,6 +1,7 @@
 //! Envío y recepción del vídeo de una sesión ya aceptada.
 use crate::net::{Secure, msg};
 use crate::{Res, now_us, platform, viewer};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -44,13 +45,14 @@ pub fn open(monitor: usize, fps: u32, mbps: u32, show_cursor: bool) -> Res<platf
     platform::Source::new(monitor, fps, mbps, pattern, show_cursor)
 }
 
-/// Anfitrión: transmite el monitor hasta que se corte la conexión.
-pub fn serve(ch: &mut Secure, mut src: platform::Source, fps: u32) -> Res<()> {
+/// Anfitrión: transmite el monitor hasta que se corte la conexión. `keyframe`: el visor pidió un fotograma clave.
+pub fn serve(ch: &mut Secure, mut src: platform::Source, fps: u32, keyframe: &AtomicBool) -> Res<()> {
     let (w, h) = src.size();
     ch.send_typed(msg::HELLO, &hello_bytes(w, h, fps))?;
     let mut cursor = (i32::MIN, 0, false);
     let mut st = Stats::new();
     loop {
+        if keyframe.swap(false, Ordering::Relaxed) { src.request_keyframe(); }
         match src.next()? {
             Some(f) => {
                 cursor = src.cursor();

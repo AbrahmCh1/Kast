@@ -116,6 +116,9 @@ impl Encoder {
     }
 
     /// Codifica un fotograma NV12; devuelve las unidades H.264 (Annex B) producidas.
+    /// El siguiente fotograma sale como fotograma clave.
+    pub fn force_keyframe(&self) { set_codec(&self.mft, &CODECAPI_AVEncVideoForceKeyFrame, 1, false); }
+
     pub fn encode(&mut self, nv12: &[u8]) -> Result<Vec<u8>> {
         let len = (self.w * self.h * 3 / 2) as usize;
         let s = new_sample(len as u32)?;

@@ -17,7 +17,7 @@ use objc2_core_video::{CVImageBuffer, CVPixelBufferGetBaseAddress, CVPixelBuffer
 use objc2_foundation::{NSArray, NSError};
 use objc2_screen_capture_kit::{SCContentFilter, SCShareableContent, SCStream, SCStreamConfiguration, SCStreamOutput, SCStreamOutputType};
 use objc2_video_toolbox::*;
-use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::ffi::c_void;
 use std::ptr::{NonNull, null, null_mut};
 use std::sync::Mutex;
@@ -134,7 +134,28 @@ unsafe extern "C-unwind" fn enc_callback(refcon: *mut c_void, src: *mut c_void, 
 struct OutputIvars {
     session: CFRetained<VTCompressionSession>,
     fps: i32,
-    first: Cell<bool>,
+    /// El siguiente fotograma sale como fotograma clave (el primero, o cuando lo pide el visor).
+    force: AtomicBool,
+    /// Última imagen capturada: con la pantalla quieta ScreenCaptureKit no manda nada nuevo, así que un
+    /// fotograma clave pedido se codifica a partir de ella.
+    last: Mutex<Option<CFRetained<CVImageBuffer>>>,
+    /// Las dos vías (captura y petición) codifican de una en una.
+    encoding: Mutex<()>,
+}
+
+impl OutputIvars {
+    fn encode(&self, img: &CVImageBuffer, pts: CMTime) {
+        let _g = self.encoding.lock().unwrap();
+        let props = self.force.swap(false, Ordering::Relaxed).then(|| {
+            let key: &CFString = unsafe { kVTEncodeFrameOptionKey_ForceKeyFrame };
+            CFDictionary::<CFString, CFBoolean>::from_slices(&[key], &[cf_bool(true)])
+        });
+        let dur = unsafe { CMTime::new(1, self.fps) };
+        let ts = now_us();
+        unsafe {
+            self.session.encode_frame(img, pts, dur, props.as_deref().map(|d| d.as_opaque()), ts as *mut c_void, null_mut());
+        }
+    }
 }
 
 define_class!(
@@ -153,18 +174,8 @@ define_class!(
             // Los fotogramas "sin cambios" no traen imagen.
             let Some(img) = (unsafe { sample.image_buffer() }) else { return };
             let iv = self.ivars();
-            let ts = now_us();
-            let pts = unsafe { sample.presentation_time_stamp() };
-            let dur = unsafe { CMTime::new(1, iv.fps) };
-            let props = if iv.first.replace(false) {
-                let key: &CFString = unsafe { kVTEncodeFrameOptionKey_ForceKeyFrame };
-                Some(CFDictionary::<CFString, CFBoolean>::from_slices(&[key], &[cf_bool(true)]))
-            } else {
-                None
-            };
-            unsafe {
-                iv.session.encode_frame(&img, pts, dur, props.as_deref().map(|d| d.as_opaque()), ts as *mut c_void, null_mut());
-            }
+            iv.encode(&img, unsafe { sample.presentation_time_stamp() });
+            *iv.last.lock().unwrap() = Some(img);
         }
     }
 );
@@ -254,7 +265,7 @@ impl Source {
             config.setColorMatrix(objc2_core_graphics::kCGDisplayStreamYCbCrMatrix_ITU_R_709_2);
         }
         let stream = unsafe { SCStream::initWithFilter_configuration_delegate(SCStream::alloc(), &filter, &config, None) };
-        let output = StreamOutput::new(OutputIvars { session, fps: fps as i32, first: Cell::new(true) });
+        let output = StreamOutput::new(OutputIvars { session, fps: fps as i32, force: AtomicBool::new(true), last: Mutex::new(None), encoding: Mutex::new(()) });
         let queue = dispatch2::DispatchQueue::new("io.github.abrahmch1.kast-link.capture", None);
         unsafe { stream.addStreamOutput_type_sampleHandlerQueue_error(ProtocolObject::from_ref(&*output), SCStreamOutputType::Screen, Some(&queue)) }
             .map_err(|e| format!("ScreenCaptureKit: {}", e.localizedDescription()))?;
@@ -282,6 +293,18 @@ impl Source {
         unsafe {
             session.complete_frames(objc2_core_media::kCMTimeInvalid);
             session.invalidate();
+        }
+    }
+
+    /// Fotograma clave con la última imagen (aunque la pantalla no haya cambiado).
+    pub fn request_keyframe(&mut self) {
+        let iv = self._output.ivars();
+        iv.force.store(true, Ordering::Relaxed);
+        let last = iv.last.lock().unwrap().clone();
+        if let Some(img) = last {
+            // Mismo reloj que las marcas de ScreenCaptureKit, así la marca de tiempo sigue creciendo.
+            let now = unsafe { objc2_core_media::CMClock::host_time_clock().time() };
+            iv.encode(&img, now);
         }
     }
 

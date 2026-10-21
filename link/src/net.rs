@@ -19,6 +19,8 @@ pub mod msg {
     pub const DATA: u8 = 3;
     /// anfitrión -> visor: sólo se movió el cursor (i32 x, i32 y, u8 visible)
     pub const CURSOR: u8 = 4;
+    /// visor -> anfitrión: pide un fotograma clave (le falta la imagen inicial o el decodificador falló)
+    pub const KEYFRAME: u8 = 13;
     /// visor -> anfitrión: teclado y ratón (ver input.rs)
     pub const INPUT: u8 = 20;
     /// ambos sentidos (sesión con control): portapapeles, u8 tipo (1 texto UTF-8, 2 PNG) + u32 bytes; siguen CLIP_DATA

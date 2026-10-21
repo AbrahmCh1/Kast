@@ -15,6 +15,9 @@ bool kl_start(const char *dir, const char *name, void *ctx, kl_event_cb ev, kl_f
 void kl_command(const char *json);
 uint64_t kl_connect(const char *id, uint32_t monitor, bool control);
 
+// Pide un fotograma clave (al abrir la vista o si el decodificador falló).
+void kl_keyframe(uint64_t session);
+
 void kl_mouse_move(uint64_t session, int32_t x, int32_t y);
 void kl_mouse_button(uint64_t session, uint8_t button, bool down, int32_t x, int32_t y);
 void kl_wheel(uint64_t session, int32_t dx, int32_t dy);

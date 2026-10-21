@@ -26,6 +26,7 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
     /// Cursor en píxeles remotos.
     private var cx: CGFloat = 0, cy: CGFloat = 0
     private var trackpad = true
+    private var liveSeen = false
     private var host: String { client.session?.platform ?? "" }
 
     // MARK: - Vista
@@ -99,6 +100,13 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         bar.isHidden = s.state != "live"
         barBg.isHidden = bar.isHidden
         keys.keyBar.host = s.platform
+        if s.state == "live", !liveSeen {
+            // La imagen inicial pudo llegar antes de que esta vista estuviera lista: se pide otra.
+            liveSeen = true
+            let id = s.id
+            video.requestKeyframe = { kl_keyframe(id) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.video.askKeyframe() }
+        }
         if s.state == "live", (s.width != rw || s.height != rh) {
             rw = s.width; rh = s.height
             cx = CGFloat(rw) / 2; cy = CGFloat(rh) / 2

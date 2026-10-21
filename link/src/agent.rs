@@ -603,6 +603,8 @@ impl Agent {
                                                      stopped: false, control, dev: String::new(), show_on: 0, want_control: control, files: None });
         self.emit_state();
         store::log(&format!("{name} empieza a {} la pantalla {monitor}", if control { "controlar" } else { "ver" }));
+        // El visor puede pedir un fotograma clave (p. ej. la app de iOS al abrir la sesión o si su decodificador falla).
+        let keyframe = Arc::new(AtomicBool::new(false));
         // Con control: teclado y ratón del visor inyectados aquí, portapapeles compartido y archivos recibidos.
         let _clip = if control {
             let (w, h) = src.size();
@@ -614,12 +616,13 @@ impl Agent {
             // En pruebas no se vigila el portapapeles real de este equipo.
             let clip = (!test).then(|| Arc::new(share::ClipSync::start(move |m| tx.lock().unwrap().send(&m).is_ok())));
             let (viewer, host) = (plat.clone(), store::platform());
-            let (clip2, a, peer) = (clip.clone(), self.clone(), name.clone());
+            let (clip2, a, peer, kf) = (clip.clone(), self.clone(), name.clone(), keyframe.clone());
             std::thread::spawn(move || {
                 let mut m = Vec::new();
                 let mut files = share::FileRecv::new();
                 while rx.recv(&mut m).is_ok() {
                     match m.first() {
+                        Some(&msg::KEYFRAME) => kf.store(true, Ordering::Relaxed),
                         Some(&msg::INPUT) => {
                             if let Some(mut e) = input::Event::decode(&m[1..]) {
                                 if let input::Event::Key { code, .. } = &mut e { *code = input::map_modifier(code, &viewer, host); }
@@ -653,9 +656,17 @@ impl Agent {
             });
             clip
         } else {
+            // Sólo vista: lo único que manda el visor es la petición de fotograma clave.
+            let (mut rx, kf) = (ch.try_clone()?, keyframe.clone());
+            std::thread::spawn(move || {
+                let mut m = Vec::new();
+                while rx.recv(&mut m).is_ok() {
+                    if m.first() == Some(&msg::KEYFRAME) { kf.store(true, Ordering::Relaxed); }
+                }
+            });
             None
         };
-        let r = stream::serve(&mut ch, src, FPS);
+        let r = stream::serve(&mut ch, src, FPS, &keyframe);
         self.end_session(session);
         store::log(&format!("sesión con {name} terminada{}", r.err().map(|e| format!(": {e}")).unwrap_or_default()));
         Ok(())

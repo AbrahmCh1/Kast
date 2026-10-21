@@ -103,6 +103,12 @@ impl Source {
 
     pub fn cursor(&self) -> (i32, i32, bool) { self.cap.as_ref().map_or((0, 0, false), |c| c.cursor) }
 
+    /// Fotograma clave con la imagen actual (aunque no haya cambiado).
+    pub fn request_keyframe(&mut self) {
+        self.enc.force_keyframe();
+        self.pending = true;
+    }
+
     /// Espera al siguiente intervalo. Some = fotograma codificado; None = sin imagen nueva
     /// (el cursor puede haberse movido: ver `cursor()`).
     pub fn next(&mut self) -> Res<Option<Encoded>> {

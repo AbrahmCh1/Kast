@@ -327,16 +327,15 @@ impl Client {
     }
 }
 
-/// Con control: un hilo envía al otro equipo lo que la app mande (teclado, ratón, portapapeles).
-fn control_tx(c: &Client, session: u64, ch: &Secure, control: bool) -> Result<(), ()> {
+/// Un hilo envía al otro equipo lo que la app mande: petición de fotograma clave y, con control, teclado,
+/// ratón y portapapeles (sin control el otro equipo sólo atiende la petición de fotograma clave).
+fn control_tx(c: &Client, session: u64, ch: &Secure, _control: bool) -> Result<(), ()> {
     let mut s = c.sessions.lock().unwrap();
     let sess = s.get_mut(&session).ok_or(())?;
-    if control {
-        let (tx, rx) = channel::<Vec<u8>>();
-        let mut out = ch.try_clone().map_err(|_| ())?;
-        std::thread::spawn(move || { for m in rx { if out.send(&m).is_err() { break; } } });
-        sess.tx = Some(tx);
-    }
+    let (tx, rx) = channel::<Vec<u8>>();
+    let mut out = ch.try_clone().map_err(|_| ())?;
+    std::thread::spawn(move || { for m in rx { if out.send(&m).is_err() { break; } } });
+    sess.tx = Some(tx);
     Ok(())
 }
 
@@ -400,6 +399,12 @@ pub unsafe extern "C" fn kl_command(json: *const c_char) {
 pub unsafe extern "C" fn kl_connect(id: *const c_char, monitor: u32, control: bool) -> u64 {
     let Some(c) = client() else { return 0 };
     c.connect(&unsafe { cstr(id) }, monitor.max(1) as usize, control)
+}
+
+/// Pide al otro equipo un fotograma clave (al abrir la vista o si el decodificador falló).
+#[unsafe(no_mangle)]
+pub extern "C" fn kl_keyframe(session: u64) {
+    if let Some(c) = client() { c.send(session, vec![msg::KEYFRAME]); }
 }
 
 #[unsafe(no_mangle)]

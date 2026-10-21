@@ -9,6 +9,11 @@ final class VideoView: UIView, VideoSink {
     private var renderer: AVSampleBufferVideoRenderer!
     private var format: CMVideoFormatDescription?
     private var sps = Data(), pps = Data()
+    /// Hasta el primer fotograma IDR los demás no se pueden decodificar (se verían en negro): se descartan.
+    private var gotIDR = false
+    private var lastRequest = Date.distantPast
+    /// Pide al otro equipo un fotograma clave (se asigna antes de que lleguen fotogramas).
+    var requestKeyframe: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -23,9 +28,37 @@ final class VideoView: UIView, VideoSink {
             sps = s; pps = p
             format = Self.makeFormat(sps: s, pps: p)
         }
+        if renderer.status == .failed {
+            // El decodificador falló: se reinicia y se espera un fotograma clave nuevo.
+            renderer.flush()
+            gotIDR = false
+        }
+        if !gotIDR {
+            guard Self.isIDR(avcc) else { askKeyframe(); return }
+            gotIDR = true
+        }
         guard let format, let sample = Self.makeSample(avcc, format: format) else { return }
-        if renderer.status == .failed { renderer.flush() }
         renderer.enqueue(sample)
+    }
+
+    /// Pide un fotograma clave (como mucho uno por segundo).
+    func askKeyframe() {
+        guard Date().timeIntervalSince(lastRequest) > 1 else { return }
+        lastRequest = Date()
+        requestKeyframe?()
+    }
+
+    /// ¿Lleva el fotograma (AVCC) un corte IDR (NAL de tipo 5)?
+    private static func isIDR(_ d: Data) -> Bool {
+        d.withUnsafeBytes { (b: UnsafeRawBufferPointer) -> Bool in
+            var i = 0
+            while i + 4 < b.count {
+                let n = Int(b[i]) << 24 | Int(b[i + 1]) << 16 | Int(b[i + 2]) << 8 | Int(b[i + 3])
+                if b[i + 4] & 0x1F == 5 { return true }
+                i += 4 + n
+            }
+            return false
+        }
     }
 
     private static func makeFormat(sps: Data, pps: Data) -> CMVideoFormatDescription? {
