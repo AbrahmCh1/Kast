@@ -10,12 +10,18 @@ pub enum Event {
     /// Rueda en 1/120 de "muesca" (120 = una línea), como en Windows.
     Wheel { dx: i32, dy: i32 },
     Key { down: bool, code: String },
+    /// Texto que se escribe tal cual, sin depender de la distribución del teclado remoto (teclado de iOS).
+    Text { text: String },
 }
+
+/// Máximo de bytes de texto por mensaje (la app trocea lo más largo).
+pub const MAX_TEXT: usize = 4000;
 
 const MOVE: u8 = 1;
 const BUTTON: u8 = 2;
 const WHEEL: u8 = 3;
 const KEY: u8 = 4;
+const TEXT: u8 = 5;
 
 impl Event {
     /// Mensaje completo (con el tipo INPUT delante).
@@ -34,6 +40,13 @@ impl Event {
                 m.extend_from_slice(&[KEY, *down as u8, c.len() as u8]);
                 m.extend_from_slice(c);
             }
+            Event::Text { text } => {
+                let mut end = text.len().min(MAX_TEXT);
+                while !text.is_char_boundary(end) { end -= 1; }
+                m.push(TEXT);
+                m.extend_from_slice(&(end as u16).to_be_bytes());
+                m.extend_from_slice(&text.as_bytes()[..end]);
+            }
         }
         m
     }
@@ -50,15 +63,20 @@ impl Event {
                 let code = std::str::from_utf8(b.get(3..3 + len)?).ok()?.to_string();
                 Some(Event::Key { down: *b.get(1)? != 0, code })
             }
+            TEXT => {
+                let len = u16::from_be_bytes(b.get(1..3)?.try_into().ok()?) as usize;
+                Some(Event::Text { text: std::str::from_utf8(b.get(3..3 + len)?).ok()?.to_string() })
+            }
             _ => None,
         }
     }
 }
 
 /// Entre Windows y Mac se intercambian Ctrl y ⌘ para que los atajos se escriban igual
-/// (Ctrl+C en Windows → ⌘C en Mac y al revés).
+/// (Ctrl+C en Windows → ⌘C en Mac y al revés). iOS usa los modificadores de Apple, como macOS.
 pub fn map_modifier(code: &str, viewer: &str, host: &str) -> String {
-    if viewer == host || viewer.is_empty() { return code.to_string(); }
+    fn family(p: &str) -> &str { if p == "ios" { "mac" } else { p } }
+    if family(viewer) == family(host) || viewer.is_empty() { return code.to_string(); }
     match code {
         "ControlLeft" => "SuperLeft",
         "ControlRight" => "SuperRight",
@@ -76,7 +94,7 @@ mod tests {
     #[test]
     fn roundtrip() {
         for e in [Event::Move { x: 10, y: -3 }, Event::Button { button: 1, down: true, x: 5, y: 6 }, Event::Wheel { dx: 0, dy: -120 },
-                  Event::Key { down: false, code: "ShiftLeft".into() }] {
+                  Event::Key { down: false, code: "ShiftLeft".into() }, Event::Text { text: "Hola, ñandú 😀".into() }] {
             let m = e.encode();
             let d = Event::decode(&m[1..]).unwrap();
             assert_eq!(d.encode(), m);
@@ -89,5 +107,8 @@ mod tests {
         assert_eq!(map_modifier("SuperLeft", "mac", "windows"), "ControlLeft");
         assert_eq!(map_modifier("ControlLeft", "windows", "windows"), "ControlLeft");
         assert_eq!(map_modifier("KeyA", "windows", "mac"), "KeyA");
+        // iOS tiene los modificadores de Apple: igual que un Mac.
+        assert_eq!(map_modifier("SuperLeft", "ios", "mac"), "SuperLeft");
+        assert_eq!(map_modifier("SuperLeft", "ios", "windows"), "ControlLeft");
     }
 }

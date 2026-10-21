@@ -2,9 +2,20 @@
 //! la identidad del equipo y los dispositivos conocidos (de confianza y agregados por IP).
 use crate::net::{self, Identity};
 use std::path::PathBuf;
+use std::sync::OnceLock;
+
+/// Carpeta y nombre fijados por la app (iOS: su carpeta de documentos y el nombre del dispositivo).
+static DIR: OnceLock<PathBuf> = OnceLock::new();
+static NAME: OnceLock<String> = OnceLock::new();
+
+pub fn set_config(dir: PathBuf, name: String) {
+    let _ = DIR.set(dir);
+    let _ = NAME.set(name);
+}
 
 /// %APPDATA%\Kast en Windows, ~/Library/Application Support/Kast en macOS (KAST_LINK_HOME para pruebas).
 pub fn config_dir() -> PathBuf {
+    if let Some(d) = DIR.get() { return d.clone(); }
     if let Some(d) = std::env::var_os("KAST_LINK_HOME") { return d.into(); }
     #[cfg(windows)]
     let base = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| ".".into()).join("Kast");
@@ -38,6 +49,7 @@ fn restrict(_: &std::path::Path) {}
 
 /// Nombre visible del equipo.
 pub fn device_name() -> String {
+    if let Some(n) = NAME.get() { return n.clone(); }
     #[cfg(windows)]
     { std::env::var("COMPUTERNAME").unwrap_or_else(|_| "PC".into()) }
     #[cfg(not(windows))]
@@ -48,7 +60,7 @@ pub fn device_name() -> String {
     }
 }
 
-pub fn platform() -> &'static str { if cfg!(windows) { "windows" } else { "mac" } }
+pub fn platform() -> &'static str { if cfg!(windows) { "windows" } else if cfg!(target_os = "ios") { "ios" } else { "mac" } }
 
 /// Registro de diagnóstico (link.log junto a la configuración; se reinicia con cada arranque del agente).
 pub fn log(msg: &str) {
@@ -81,6 +93,17 @@ pub struct Saved {
     pub manual: bool,
     /// Además de ver, puede controlar teclado y ratón sin preguntar.
     pub control: bool,
+}
+
+/// Comprueba la identidad de un equipo al conectar: debe ser quien dice ser (`id` del anuncio, salvo los
+/// agregados por IP) y no puede haber cambiado desde la última vez (TOFU).
+pub fn check_peer(saved: &[Saved], id: &str, peer: &[u8]) -> Result<(), &'static str> {
+    let (peer_key, peer_id) = (net::hex(peer), net::id_of(peer));
+    if !id.starts_with("ip:") && peer_id != id { return Err("la identidad del dispositivo no coincide"); }
+    match saved.iter().find(|s| !s.key.is_empty() && net::id_of(&net::unhex(&s.key).unwrap_or_default()) == peer_id) {
+        Some(s) if s.key != peer_key => Err("la identidad del dispositivo cambió: olvídalo y vuelve a agregarlo"),
+        _ => Ok(()),
+    }
 }
 
 fn devices_path() -> PathBuf { config_dir().join("link-devices.tsv") }

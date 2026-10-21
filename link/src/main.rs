@@ -6,68 +6,13 @@
 //!   kast-link id                                    nombre e identidad de este equipo
 //!   kast-link record [-m N | --pattern] [--frames 120] <archivo>   grabar un flujo H.264 (pruebas)
 //!   kast-link play <archivo> [--dump imagen.bmp]                   decodificar un flujo grabado (pruebas)
-mod agent;
-mod discovery;
-mod h264;
-mod input;
-mod net;
-mod share;
-mod store;
-mod stream;
-mod viewer;
-
-#[cfg(target_os = "macos")]
-mod mac;
-#[cfg(target_os = "macos")]
-use mac as platform;
-#[cfg(windows)]
-mod win;
-#[cfg(windows)]
-use win as platform;
-
-use std::error::Error;
+//!   kast-link probe <ip:puerto> [--home dir] [--secs 10] [--text t] [--clip t]   cliente de iOS desde la terminal (pruebas)
+use kast_link::{Res, agent, mobile, platform, store, stream};
 use std::io::{Read, Write};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
-pub type Res<T> = Result<T, Box<dyn Error>>;
+use std::time::{Duration, Instant};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const RECORD_MAGIC: &[u8; 4] = b"KLNK";
-
-/// Monitor de este equipo (numerados de izquierda a derecha, como en Kast).
-pub struct DisplayInfo {
-    pub name: String,
-    pub x: i32,
-    pub y: i32,
-    pub w: u32,
-    pub h: u32,
-}
-
-/// Fotograma codificado en H.264 Annex B.
-pub struct Encoded {
-    pub data: Vec<u8>,
-    /// Momento de la captura (µs desde 1970), para medir la latencia.
-    pub ts_us: u64,
-    /// Tiempo de captura + codificación en este equipo.
-    pub work_ms: f32,
-}
-
-pub fn now_us() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_micros() as u64).unwrap_or(0) }
-
-/// Patrón de prueba sintético (BGRA): barras de color en movimiento y un cuadrado que rebota.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
-pub fn pattern(n: u64, w: usize, h: usize, bgra: &mut [u8]) {
-    const BARS: [[u8; 3]; 8] = [[255, 255, 255], [0, 255, 255], [255, 255, 0], [0, 255, 0], [255, 0, 255], [0, 0, 255], [255, 0, 0], [40, 40, 40]];
-    let shift = (n as usize * 4) % w;
-    let (sq, sx, sy) = (h / 6, (n as usize * 7) % (w - h / 6), (n as usize * 5) % (h - h / 6));
-    for y in 0..h {
-        for x in 0..w {
-            let c = if x >= sx && x < sx + sq && y >= sy && y < sy + sq { [0, 0, 0] } else { BARS[((x + shift) % w) * 8 / w] };
-            let p = (y * w + x) * 4;
-            bgra[p..p + 4].copy_from_slice(&[c[0], c[1], c[2], 255]);
-        }
-    }
-}
 
 fn main() {
     platform::init();
@@ -122,6 +67,7 @@ fn run() -> Res<()> {
         }
         Some("record") => record(&o),
         Some("play") => play(&o),
+        Some("probe") => probe(&o),
         Some("version") | Some("--version") => { println!("kast-link {VERSION}"); Ok(()) }
         _ => {
             println!("kast-link {VERSION} — pantalla de otro equipo por la red local (cifrado)\n");
@@ -134,6 +80,59 @@ fn run() -> Res<()> {
             Ok(())
         }
     }
+}
+
+// ---------------------------------------------------------------- pruebas: cliente de iOS
+
+static FRAMES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static KEYFRAMES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static LIVE: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
+
+extern "C" fn probe_event(_: *mut std::ffi::c_void, json: *const std::ffi::c_char) {
+    let s = unsafe { std::ffi::CStr::from_ptr(json) }.to_string_lossy().into_owned();
+    if s.contains(r#""ev":"devices""#) { return; }
+    println!("{s}");
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+        if v["state"] == "live" && v["control"] == true { *LIVE.lock().unwrap() = v["session"].as_u64(); }
+    }
+}
+
+extern "C" fn probe_frame(_: *mut std::ffi::c_void, _: u64, _: *const u8, len: usize, _: *const u8, sps: usize, _: *const u8, pps: usize) {
+    use std::sync::atomic::Ordering;
+    if len > 0 { FRAMES.fetch_add(1, Ordering::Relaxed); }
+    if sps > 0 && pps > 0 { KEYFRAMES.fetch_add(1, Ordering::Relaxed); }
+}
+
+/// Se conecta como la app de iOS (mobile.rs) y cuenta los fotogramas recibidos.
+fn probe(o: &Opts) -> Res<()> {
+    use std::ffi::CString;
+    use std::sync::atomic::Ordering;
+    let addr = o.pos.get(1).ok_or("uso: kast-link probe <ip:puerto> [--home dir] [--secs 10] [--text t] [--clip t]")?;
+    let home = o.get(&["--home"]).map(String::from).unwrap_or_else(|| std::env::temp_dir().join("kast-probe").display().to_string());
+    let secs: u64 = o.num(&["--secs"], 10);
+    let (dir, name) = (CString::new(home)?, CString::new("Prueba iOS")?);
+    if !unsafe { mobile::kl_start(dir.as_ptr(), name.as_ptr(), std::ptr::null_mut(), probe_event, probe_frame) } {
+        return Err("no se pudo iniciar el cliente".into());
+    }
+    let id = CString::new(format!("ip:{addr}"))?;
+    let _session = unsafe { mobile::kl_connect(id.as_ptr(), o.num(&["-m", "--monitor"], 1), true) };
+    let t0 = Instant::now();
+    let mut sent = false;
+    while t0.elapsed() < Duration::from_secs(secs) {
+        std::thread::sleep(Duration::from_millis(200));
+        let live = *LIVE.lock().unwrap();
+        if let (Some(s), false) = (live, sent) {
+            if FRAMES.load(Ordering::Relaxed) > 0 {
+                sent = true;
+                if let Some(t) = o.get(&["--text"]) { let t = CString::new(t)?; unsafe { mobile::kl_text(s, t.as_ptr()) }; }
+                if let Some(t) = o.get(&["--clip"]) { let t = CString::new(t)?; unsafe { mobile::kl_clip_text(s, t.as_ptr()) }; }
+            }
+        }
+    }
+    let (n, k) = (FRAMES.load(Ordering::Relaxed), KEYFRAMES.load(Ordering::Relaxed));
+    println!("probe: {n} fotogramas ({k} con SPS/PPS)");
+    if n == 0 || k == 0 { return Err("no llegó vídeo utilizable".into()); }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- pruebas: grabar / reproducir

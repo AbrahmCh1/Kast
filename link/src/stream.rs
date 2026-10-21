@@ -39,7 +39,9 @@ impl Stats {
 
 /// Prepara la captura del monitor (antes de aceptar la conexión, para poder explicar si falla).
 pub fn open(monitor: usize, fps: u32, mbps: u32, show_cursor: bool) -> Res<platform::Source> {
-    platform::Source::new(monitor, fps, mbps, false, show_cursor)
+    // Pruebas (KAST_LINK_TEST, sólo Windows): patrón sintético en vez de la pantalla real.
+    let pattern = cfg!(windows) && std::env::var_os("KAST_LINK_TEST").is_some();
+    platform::Source::new(monitor, fps, mbps, pattern, show_cursor)
 }
 
 /// Anfitrión: transmite el monitor hasta que se corte la conexión.

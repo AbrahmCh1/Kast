@@ -168,6 +168,19 @@ try:
     else:
         print("8) archivos: omitido (B no permite el control en este equipo)")
     hang_up(s)
+
+    # Cliente de iOS (mobile.rs, por la terminal): pide ver y controlar la pantalla de B como un iPhone.
+    probe_home = tempfile.mkdtemp()
+    probe = subprocess.Popen([EXE, "probe", f"127.0.0.1:{base + 10}", "--home", probe_home, "--secs", "15"],
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8")
+    req5 = B.wait(lambda m: m.get("ev") == "request", 20)
+    assert req5["platform"] == "ios" and req5["control"] is True, req5
+    B.send(cmd="answer", req=req5["req"], accept=True, remember=False, control=True)
+    out, _ = probe.communicate(timeout=40)
+    assert probe.returncode == 0, out
+    assert '"state":"live"' in out, out
+    print(f"9) iOS: {[l for l in out.splitlines() if l.startswith('probe:')][0]} (petición «{req5['name']}», plataforma {req5['platform']})")
+    B.wait(state(lambda m: not m["sessions"]), 20)
     print("OK")
 finally:
     for a in (A, B):

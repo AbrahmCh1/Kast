@@ -1,7 +1,11 @@
 //! Durante una sesión con control: portapapeles compartido (en los dos sentidos) y envío de archivos
 //! (del visor al equipo controlado, arrastrándolos a la ventana).
+//! En iOS sólo se usan el formato de los mensajes y el envío de archivos: su portapapeles lo gestiona la app.
+#![cfg_attr(target_os = "ios", allow(dead_code, unused_imports))]
 use crate::net::msg;
-use crate::{Res, platform};
+use crate::Res;
+#[cfg(not(target_os = "ios"))]
+use crate::platform;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -61,6 +65,7 @@ pub fn png_decode(data: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
 
 // ---------------------------------------------------------------- portapapeles
 
+#[cfg(not(target_os = "ios"))]
 struct ClipState {
     /// Último número de secuencia visto (o puesto por nosotros: no se reenvía).
     seen: u64,
@@ -70,12 +75,14 @@ struct ClipState {
     rx: Option<(u8, usize, Vec<u8>)>,
 }
 
+#[cfg(not(target_os = "ios"))]
 /// Sincroniza el portapapeles con el otro equipo mientras exista.
 pub struct ClipSync {
     st: Arc<Mutex<ClipState>>,
     stop: Arc<AtomicBool>,
 }
 
+#[cfg(not(target_os = "ios"))]
 impl ClipSync {
     /// `send` envía un mensaje al otro equipo (false si la sesión terminó).
     pub fn start(send: impl Fn(Vec<u8>) -> bool + Send + 'static) -> Self {
@@ -144,6 +151,7 @@ impl ClipSync {
     }
 }
 
+#[cfg(not(target_os = "ios"))]
 impl Drop for ClipSync {
     fn drop(&mut self) { self.stop.store(true, Ordering::Relaxed); }
 }
@@ -240,6 +248,7 @@ fn unique(dir: &Path, name: &str) -> String {
     (2..).map(|n| format!("{stem} ({n}){ext}")).find(|c| !dir.join(c).exists()).unwrap()
 }
 
+#[cfg(not(target_os = "ios"))]
 impl FileRecv {
     pub fn new() -> Self {
         Self { dir: downloads_dir(), open: HashMap::new(), roots: HashMap::new(), first: None, count: 0, bytes: 0 }
@@ -292,12 +301,14 @@ impl FileRecv {
 }
 
 /// Carpeta de descargas (KAST_LINK_DOWNLOADS para pruebas).
+#[cfg(not(target_os = "ios"))]
 pub fn downloads_dir() -> PathBuf {
     if let Some(d) = std::env::var_os("KAST_LINK_DOWNLOADS") { return d.into(); }
     platform::downloads_dir()
 }
 
 /// Muestra lo recibido en el Explorador / Finder (no en las pruebas).
+#[cfg(not(target_os = "ios"))]
 pub fn reveal(p: &Path) {
     if std::env::var_os("KAST_LINK_DOWNLOADS").is_some() { return; }
     #[cfg(windows)]
@@ -329,6 +340,7 @@ mod tests {
         assert_eq!(png_decode(&png).unwrap(), (4, 3, rgba));
     }
 
+    #[cfg(not(target_os = "ios"))]
     /// Portapapeles real del sistema: sólo con KAST_TEST_CLIPBOARD=1 (en la CI; aquí sobrescribiría el del usuario).
     #[test]
     fn portapapeles_real() {
@@ -358,6 +370,7 @@ mod tests {
         assert_eq!(clean("nota. "), Some("nota".into()));
     }
 
+    #[cfg(not(target_os = "ios"))]
     #[test]
     fn archivos_ida_y_vuelta() {
         let base = std::env::temp_dir().join(format!("kast-share-{}", std::process::id()));

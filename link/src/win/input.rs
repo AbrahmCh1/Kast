@@ -138,6 +138,23 @@ impl Injector {
                     send(&[key(VIRTUAL_KEY(0), scan, flags)]);
                 }
             }
+            Event::Text { text } => {
+                // Cada unidad UTF-16 como carácter Unicode (pulsar y soltar); los saltos de línea como Intro.
+                let mut v = Vec::new();
+                for c in text.replace("\r\n", "\n").chars() {
+                    if c == '\n' {
+                        v.push(key(VK_RETURN, 0, KEYBD_EVENT_FLAGS(0)));
+                        v.push(key(VK_RETURN, 0, KEYEVENTF_KEYUP));
+                        continue;
+                    }
+                    let mut buf = [0u16; 2];
+                    for &u in c.encode_utf16(&mut buf).iter() {
+                        v.push(key(VIRTUAL_KEY(0), u, KEYEVENTF_UNICODE));
+                        v.push(key(VIRTUAL_KEY(0), u, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
+                    }
+                }
+                if !v.is_empty() { send(&v); }
+            }
         }
     }
 }

@@ -15,10 +15,11 @@ function RoundRect([float]$x, [float]$y, [float]$w, [float]$h, [float]$r) {
 }
 
 # $margin: margen de la baldosa en unidades de la rejilla de 64 (macOS usa el de sus iconos: ~6.25).
-function Draw([int]$size, [float]$margin = -1) {
+# $full: a sangre completa, cuadrado y opaco (iOS redondea las esquinas por su cuenta).
+function Draw([int]$size, [float]$margin = -1, [switch]$full) {
     $S = $size * 4
     $small = $size -le 24
-    if ($margin -lt 0) { $margin = if ($small) { 1 } else { 3 } }
+    if ($full) { $margin = 0 } elseif ($margin -lt 0) { $margin = if ($small) { 1 } else { 3 } }
     # La baldosa ocupa 64 - 2*margin; el dibujo se escala dentro de ella (diseño en una rejilla de 64 con margen 3).
     $u = $S / 64.0 * (64 - 2 * $margin) / 58.0
     $o = $S / 64.0 * $margin - 3 * $u
@@ -32,9 +33,9 @@ function Draw([int]$size, [float]$margin = -1) {
     $tile = RoundRect (3 * $u) (3 * $u) (58 * $u) (58 * $u) (14 * $u)
     $rect = New-Object Drawing.RectangleF 0, (3 * $u), $S, (58 * $u)
     $grad = New-Object Drawing.Drawing2D.LinearGradientBrush $rect, ([Drawing.Color]::FromArgb(255, 58, 58, 64)), ([Drawing.Color]::FromArgb(255, 22, 22, 24)), 90.0
-    $g.FillPath($grad, $tile)
+    if ($full) { $g.FillRectangle($grad, (-$o), (-$o), $S, $S) } else { $g.FillPath($grad, $tile) }
     # filo claro muy sutil: que no se pierda sobre fondos oscuros (barra de tareas, Dock)
-    if (-not $small) {
+    if (-not $small -and -not $full) {
         $edge = RoundRect (3.25 * $u) (3.25 * $u) (57.5 * $u) (57.5 * $u) (13.75 * $u)
         $g.DrawPath((New-Object Drawing.Pen ([Drawing.Color]::FromArgb(28, 255, 255, 255)), (0.5 * $u)), $edge)
     }
@@ -86,3 +87,7 @@ New-Item -ItemType Directory -Force $dir | Out-Null
 [IO.File]::WriteAllBytes((Join-Path $dir 'kast-256.png'), $pngs[-1])
 # Icono de macOS (build.sh genera el .icns a partir de éste), con el margen de la rejilla de iconos de Apple (100/1024).
 [IO.File]::WriteAllBytes((Join-Path $dir 'kast-1024.png'), (Draw 1024 6.25))
+# Icono de iOS (catálogo de la app)
+$ios = Join-Path $PSScriptRoot '..\ios\Kast\Assets.xcassets\AppIcon.appiconset'
+New-Item -ItemType Directory -Force $ios | Out-Null
+[IO.File]::WriteAllBytes((Join-Path $ios 'icon-1024.png'), (Draw 1024 -full))

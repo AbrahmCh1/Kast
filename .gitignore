@@ -7,3 +7,4 @@ bin/
 zig-out/
 mac/build/
 link/target/
+ios/build/

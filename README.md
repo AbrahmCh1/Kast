@@ -4,7 +4,7 @@
 
 <p align="center">Control de monitores para <b>Windows</b> y <b>macOS</b>: brillo, contraste, entradas, resolución y disposición,<br>desde la bandeja o la barra de menús, con atajos globales y una interfaz moderna.<br>Y con <b>Kast Link</b>, ve y controla tus otros equipos en cualquiera de tus monitores, por la red local.</p>
 
-<p align="center"><a href="https://github.com/AbrahmCh1/Kast/releases">Descargar</a> · <a href="#windows">Windows</a> · <a href="#macos">macOS</a> · <a href="#kast-link">Kast Link</a></p>
+<p align="center"><a href="https://github.com/AbrahmCh1/Kast/releases">Descargar</a> · <a href="#windows">Windows</a> · <a href="#macos">macOS</a> · <a href="#kast-link">Kast Link</a> · <a href="#ios-iphone-y-ipad">iOS</a></p>
 
 <p align="center"><img src="assets/screenshot.png" width="760" alt="Interfaz de Kast"></p>
 
@@ -177,6 +177,34 @@ Desde **Dispositivos** se ven las sesiones activas y se pueden cortar, y el inte
 
 Compilar: `build.ps1` lo incluye si tienes Rust (toolchain MSVC, o GNU con las binutils de MinGW-w64). Pruebas: `cargo test --manifest-path link/Cargo.toml` y `python3 link/tests/e2e.py <kast-link>`.
 
+# iOS (iPhone y iPad)
+
+App para **ver y controlar tus equipos** con Kast desde el iPhone o el iPad, por la red local y con el mismo cifrado que Kast Link. No comparte su propia pantalla.
+
+- **Dispositivos:** encuentra solo los equipos con Kast en tu Wi-Fi (o agrégalos por IP). Toca uno, elige la pantalla y si quieres controlarlo. El otro equipo acepta con el mismo código de 6 dígitos.
+- **Modo trackpad** (por defecto):
+  - desliza un dedo para mover el cursor (con aceleración);
+  - toca = clic; dos dedos = clic derecho;
+  - mantén pulsado y arrastra = arrastrar;
+  - dos dedos deslizando = desplazamiento.
+- **Modo táctil:** tocas donde quieres hacer clic; mantener = clic derecho.
+- **Zoom:** pellizca para acercarte; la vista sigue al cursor.
+- **Teclado:**
+  - el de iOS escribe tal cual (acentos, ñ, emojis);
+  - la barra de encima añade Esc, Tab, flechas, Supr, Inicio/Fin, F1-F12, los modificadores Ctrl, Alt/⌥, Win/⌘ y ⇧ (se fijan con un toque) y un menú de atajos del sistema remoto;
+  - en el iPad funcionan el teclado físico, el ratón y el trackpad.
+- **Portapapeles:** el botón lo envía al otro equipo, y lo que copias allí llega al iPhone.
+
+Usa el núcleo de Kast Link en Rust como biblioteca estática (`link/src/mobile.rs`, API en `ios/Kast/kastlink.h`) y una interfaz en SwiftUI y UIKit, con el vídeo decodificado por hardware (`AVSampleBufferDisplayLayer`). El descubrimiento consulta directamente cada equipo de la red, así que no necesita el permiso de multidifusión de Apple.
+
+**Instalar en tu iPhone o iPad** (firma de desarrollo, sin App Store), desde un Mac con Xcode y Rust (`rustup target add aarch64-apple-ios aarch64-apple-ios-sim`):
+
+1. Conecta el iPhone por cable, acepta «Confiar en este ordenador» y activa **Ajustes → Privacidad y seguridad → Modo desarrollador**.
+2. Inicia sesión con tu cuenta de Apple en Xcode → Ajustes → Cuentas, y cambia `DEVELOPMENT_TEAM` en `ios/Kast.xcodeproj` por tu equipo.
+3. `bash ios/build.sh device` e instala con `xcrun devicectl device install app --device <id> ios/build/Release-iphoneos/Kast.app`, o abre `ios/Kast.xcodeproj` en Xcode y pulsa ▶︎.
+
+Para el simulador: `bash ios/build.sh sim`.
+
 ## Estructura
 
 ```
@@ -186,7 +214,8 @@ src/daemon.c    Windows: kastd.exe (bandeja, atajos y cola de trabajo)
 src/webui.c     Windows: ventana WebView2 alojada en C (COM a mano)
 src/ui.html     interfaz compartida por Windows y macOS
 mac/Sources/    macOS: app de la barra de menús en Swift (mismo lenguaje de comandos)
-link/           Kast Link: pantalla remota cifrada por la red local (Rust)
+link/           Kast Link: pantalla remota cifrada por la red local (Rust; biblioteca + agente de escritorio)
+ios/            app de iOS (SwiftUI + UIKit) sobre el núcleo de Kast Link
 assets/         logo (kast.svg) e iconos generados
 tools/          generador de los iconos (make-icon.ps1)
 third_party/    SDK de WebView2 (licencia BSD de Microsoft)

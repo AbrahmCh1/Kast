@@ -217,6 +217,18 @@ jobs:
         if: always() && env.KAST_KEYCHAIN != ''
         run: security delete-keychain "$KAST_KEYCHAIN" || true
 
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compilar la app de iOS (simulador, sin firmar)
+        run: |
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+          # Núcleo para el dispositivo (comprobación) y app completa para el simulador.
+          cargo check --release --locked --lib --manifest-path link/Cargo.toml --target aarch64-apple-ios
+          DEVELOPER_DIR="$(xcode-select -p)" bash ios/build.sh sim
+
   release:
     if: github.ref_type == 'tag'
     needs: [windows, macos]

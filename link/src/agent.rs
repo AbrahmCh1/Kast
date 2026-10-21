@@ -388,15 +388,7 @@ impl Agent {
         let mut ch = Secure::connect(stream, &self.me)?;
         let peer_key = net::hex(&ch.peer);
         let peer_id = id_of(&ch.peer);
-        // El dispositivo debe ser quien dice ser (el anuncio y la identidad tienen que coincidir)…
-        if !id.starts_with("ip:") && peer_id != id { return Err("la identidad del dispositivo no coincide".into()); }
-        // …y no puede haber cambiado desde la última vez (TOFU).
-        {
-            let st = self.st.lock().unwrap();
-            if let Some(s) = st.saved.iter().find(|s| !s.key.is_empty() && id_of(&net::unhex(&s.key).unwrap_or_default()) == peer_id) {
-                if s.key != peer_key { return Err("la identidad del dispositivo cambió: olvídalo y vuelve a agregarlo".into()); }
-            }
-        }
+        store::check_peer(&self.st.lock().unwrap().saved, id, &ch.peer)?;
         let sock = ch.shutdown_handle()?;
         let code = ch.code.clone();
         self.set_session(session, |s| { s.state = "waiting"; s.code = code; s.sock = Some(sock); });
@@ -557,7 +549,7 @@ impl Agent {
             let (tx, rx) = channel();
             let code = ch.code.clone();
             self.st.lock().unwrap().requests.push(Req { req, name: name.clone(), platform: plat.clone(), code: code.clone(), monitor, control: wants_control, answer: tx });
-            self.emit(json!({"t": "link", "ev": "request", "req": req, "name": name, "code": code, "monitor": monitor, "control": wants_control}));
+            self.emit(json!({"t": "link", "ev": "request", "req": req, "name": name, "platform": plat, "code": code, "monitor": monitor, "control": wants_control}));
             self.emit_state();
             let answer = rx.recv_timeout(Duration::from_secs(90));
             {
@@ -614,10 +606,13 @@ impl Agent {
         // Con control: teclado y ratón del visor inyectados aquí, portapapeles compartido y archivos recibidos.
         let _clip = if control {
             let (w, h) = src.size();
-            let mut inj = platform::Injector::new(monitor, w, h)?;
+            // Pruebas (KAST_LINK_TEST): la entrada se anuncia en vez de inyectarse en este equipo.
+            let test = std::env::var_os("KAST_LINK_TEST").is_some();
+            let mut inj = if test { None } else { Some(platform::Injector::new(monitor, w, h)?) };
             let mut rx = ch.try_clone()?;
             let tx = Mutex::new(ch.try_clone()?);
-            let clip = Arc::new(share::ClipSync::start(move |m| tx.lock().unwrap().send(&m).is_ok()));
+            // En pruebas no se vigila el portapapeles real de este equipo.
+            let clip = (!test).then(|| Arc::new(share::ClipSync::start(move |m| tx.lock().unwrap().send(&m).is_ok())));
             let (viewer, host) = (plat.clone(), store::platform());
             let (clip2, a, peer) = (clip.clone(), self.clone(), name.clone());
             std::thread::spawn(move || {
@@ -628,10 +623,16 @@ impl Agent {
                         Some(&msg::INPUT) => {
                             if let Some(mut e) = input::Event::decode(&m[1..]) {
                                 if let input::Event::Key { code, .. } = &mut e { *code = input::map_modifier(code, &viewer, host); }
-                                inj.apply(e);
+                                match &mut inj {
+                                    Some(i) => i.apply(e),
+                                    None => a.emit(json!({"t": "link", "ev": "input", "input": input_json(&e)})),
+                                }
                             }
                         }
-                        Some(&(msg::CLIP | msg::CLIP_DATA)) => clip2.on_message(&m),
+                        Some(&(msg::CLIP | msg::CLIP_DATA)) => match &clip2 {
+                            Some(c) => c.on_message(&m),
+                            None => a.emit(json!({"t": "link", "ev": "input", "input": {"clip": m[0] == msg::CLIP, "bytes": m.len() - 1}})),
+                        },
                         Some(&(msg::FILE | msg::FILE_DATA | msg::FILE_END)) => match files.on_message(&m) {
                             Ok(Some(r)) => {
                                 let what = format!("{} archivo{} ({})", r.count, if r.count == 1 { "" } else { "s" }, share::human(r.bytes));
@@ -650,7 +651,7 @@ impl Agent {
                     }
                 }
             });
-            Some(clip)
+            clip
         } else {
             None
         };
@@ -782,4 +783,15 @@ pub fn run(port: u16) -> Res<()> {
     let a = agent.clone();
     viewer::run(el, true, move |s| a.stop_session(s))?;
     Ok(())
+}
+
+/// Evento de entrada en JSON (modo de pruebas KAST_LINK_TEST).
+fn input_json(e: &input::Event) -> Value {
+    match e {
+        input::Event::Move { x, y } => json!({"move": [x, y]}),
+        input::Event::Button { button, down, x, y } => json!({"button": button, "down": down, "at": [x, y]}),
+        input::Event::Wheel { dx, dy } => json!({"wheel": [dx, dy]}),
+        input::Event::Key { down, code } => json!({"key": code, "down": down}),
+        input::Event::Text { text } => json!({"text": text}),
+    }
 }

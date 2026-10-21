@@ -169,6 +169,26 @@ impl Injector {
                 }
                 post(ev);
             }
+            Event::Text { text } => {
+                // Por trozos (macOS admite pocos caracteres por evento); los saltos de línea como Intro (kVK_Return).
+                for (i, line) in text.replace("\r\n", "\n").split('\n').enumerate() {
+                    if i > 0 {
+                        for down in [true, false] { post(CGEvent::new_keyboard_event(None, 0x24, down)); }
+                    }
+                    let units: Vec<u16> = line.encode_utf16().collect();
+                    for part in units.chunks(16) {
+                        for down in [true, false] {
+                            let ev = CGEvent::new_keyboard_event(None, 0, down);
+                            if let Some(e) = &ev {
+                                // Sin modificadores: el texto ya viene compuesto.
+                                CGEvent::set_flags(Some(e), CGEventFlags(0));
+                                unsafe { CGEvent::keyboard_set_unicode_string(Some(e), part.len() as _, part.as_ptr()) };
+                            }
+                            post(ev);
+                        }
+                    }
+                }
+            }
         }
     }
 }

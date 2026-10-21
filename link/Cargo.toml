@@ -16,6 +16,9 @@ serde_json = "1.0.154"
 # Sin la feature "std": en snow 0.10 activa "ring/std" y con ello ring (que necesita compilador de C).
 snow = { version = "0.10.0", default-features = false, features = ["default-resolver", "use-curve25519", "use-chacha20poly1305", "use-blake2", "use-getrandom"] }
 socket2 = { version = "0.6.5", features = ["all"] }
+
+# Ventanas del visor (escritorio; en iOS las pone la app).
+[target.'cfg(not(target_os = "ios"))'.dependencies]
 softbuffer = "0.4.8"
 winit = "0.30.13"
 
