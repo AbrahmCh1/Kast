@@ -181,6 +181,66 @@ try:
     assert '"state":"live"' in out, out
     print(f"9) iOS: {[l for l in out.splitlines() if l.startswith('probe:')][0]} (petición «{req5['name']}», plataforma {req5['platform']})")
     B.wait(state(lambda m: not m["sessions"]), 20)
+
+    A.send(cmd="state")
+    me_a = A.wait(state(lambda m: True))["me"]
+    is_a = lambda t: t["key"].startswith(me_a["id"])
+
+    # Acceso desatendido: con la contraseña entra sin que nadie acepte; con otra, rechazo y aviso en B.
+    B.send(cmd="access_set", password="clave de prueba 123", unattended_control=False)
+    st = B.wait(state(lambda m: m["access"]["unattended"]))
+    assert st["access"]["unattended_control"] is False
+    A.send(cmd="connect", id=me_b["id"], monitor=1, show_on=0, control=False, auth="password", secret="clave de prueba 123")
+    s = live_session()
+    B.wait(state(lambda m: any(x["dir"] == "out" and x["via"] == "password" for x in m["sessions"])))
+    hang_up(s)
+    A.send(cmd="connect", id=me_b["id"], monitor=1, show_on=0, control=False, auth="password", secret="otra clave")
+    A.wait(lambda m: m.get("ev") == "need_auth" and m.get("failed"))
+    bad = A.wait(lambda m: m.get("ev") == "toast" and m.get("err") and "incorrecta" in m.get("msg", ""))
+    B.wait(lambda m: m.get("ev") == "toast" and "Intento fallido" in m.get("msg", ""))
+    print(f"10) desatendido: entra con la contraseña sin aprobación; con otra: «{bad['msg']}»")
+
+    # Quitar el acceso y rechazar a los desconocidos: A ya no entra sin contraseña o código.
+    B.send(cmd="state")
+    st = B.wait(state(lambda m: True))
+    ka = next(t["key"] for t in st["trusted"] if is_a(t))
+    B.send(cmd="revoke", key=ka)
+    B.wait(state(lambda m: not any(is_a(t) for t in m["trusted"])))
+    B.send(cmd="access_set", unknown="reject")
+    B.wait(state(lambda m: m["access"]["unknown"] == "reject"))
+    A.send(cmd="connect", id=me_b["id"], monitor=1, show_on=0, control=False)
+    A.wait(lambda m: m.get("ev") == "need_auth" and not m.get("failed"))
+    why = A.wait(lambda m: m.get("ev") == "toast" and m.get("err"))
+    print(f"11) acceso quitado y desconocidos rechazados: «{why['msg']}»")
+
+    # Emparejamiento: código de un solo uso; después entra sin preguntar (también rechazando desconocidos).
+    B.send(cmd="pair_start", control=True)
+    code = B.wait(state(lambda m: m["pairing"]))["pairing"]["code"]
+    A.send(cmd="connect", id=me_b["id"], monitor=1, show_on=0, control=False, auth="pair", secret=code.lower().replace("-", " "))
+    s = live_session()
+    B.wait(lambda m: m.get("ev") == "toast" and "emparejado" in m.get("msg", ""))
+    st = B.wait(state(lambda m: not m["pairing"] and any(is_a(t) and t["control"] for t in m["trusted"])))
+    hang_up(s)
+    A.send(cmd="connect", id=me_b["id"], monitor=1, show_on=0, control=False)
+    hang_up(live_session())
+    A.send(cmd="connect", id=me_b["id"], monitor=1, show_on=0, control=False, auth="pair", secret=code)
+    reused = A.wait(lambda m: m.get("ev") == "toast" and m.get("err"))
+    print(f"12) emparejado con {code}: entra sin preguntar; el código ya usado: «{reused['msg']}»")
+
+    # Límite de intentos (otra identidad: la del cliente de iOS): tras 5 fallos, bloqueo aunque acierte.
+    lock_home = tempfile.mkdtemp()
+    def try_password(pw):
+        p = subprocess.run([EXE, "probe", f"127.0.0.1:{base + 10}", "--home", lock_home, "--secs", "20", "--password", pw],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+        return p.returncode, p.stdout + p.stderr
+    for _ in range(5):
+        rc, out = try_password("mala")
+        assert rc != 0 and "incorrecta" in out, out
+    rc, out = try_password("clave de prueba 123")
+    assert rc != 0 and "Demasiados intentos" in out, out
+    print("13) límite de intentos: tras 5 contraseñas incorrectas, bloqueado aunque acierte")
+    B.send(cmd="access_set", unknown="ask", unattended=False)
+    B.wait(state(lambda m: not m["access"]["unattended"] and m["access"]["unknown"] == "ask"))
     print("OK")
 finally:
     for a in (A, B):

@@ -12,14 +12,20 @@
 //!   {"cmd":"layout_save","path":"…\\X.link"}          guardar con una disposición las sesiones a pantalla completa
 //!   {"cmd":"layout_load","path":"…\\X.link"}          restaurarlas (mantiene las que ya coinciden)
 //!   {"cmd":"send_files","session":5,"paths":["…"]}    enviar archivos o carpetas a la sesión (con control)
+//!   connect admite "auth":"password"|"pair" y "secret": contraseña de acceso desatendido o código de emparejamiento;
+//!   "id" también puede ser el ID de 9 dígitos de un equipo de la red
+//!   {"cmd":"access_set","unknown":"ask"|"reject","unattended":false,"password":"…","unattended_control":true}
+//!   {"cmd":"pair_start","control":true} · {"cmd":"pair_cancel"}   código de emparejamiento de un solo uso
+//!   {"cmd":"revoke","key":"…"}                         quitar el acceso a un dispositivo
 //! Agente -> app:
 //!   {"t":"link","ev":"state",…}   estado completo (yo, dispositivos, peticiones, sesiones)
 //!   {"t":"link","ev":"request",…} alguien pide ver mis pantallas (la app debe mostrarse)
 //!   {"t":"link","ev":"toast","msg":"…","err":false}
+//!   {"t":"link","ev":"need_auth","id","name","monitor","show_on","control"}  el equipo pide contraseña o código
 use crate::discovery::{self, Beacon, Packet};
 use crate::net::{self, Identity, Secure, id_of, msg};
 use crate::store::{self, Saved};
-use crate::{Res, input, platform, share, stream, viewer};
+use crate::{Res, access, input, platform, share, stream, viewer};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -82,6 +88,10 @@ struct Sess {
     want_control: bool,
     /// "in" con control: envía archivos al otro equipo.
     files: Option<viewer::FileDrop>,
+    /// "out": cómo entró ("approved" aceptado en pantalla, "trusted" de confianza, "password" acceso desatendido,
+    /// "pair" recién emparejado) y su clave pública (para cortar la sesión al quitarle el acceso).
+    via: &'static str,
+    peer_key: String,
 }
 
 /// Sesión guardada con una disposición: id, nombre, su pantalla, mi monitor y control.
@@ -99,6 +109,11 @@ struct State {
     saved: Vec<Saved>,
     requests: Vec<Req>,
     sessions: Vec<Sess>,
+    /// Quién puede entrar en este equipo (access.rs).
+    access: access::Access,
+    /// Código de emparejamiento activo (de un solo uso).
+    pairing: Option<access::PairCode>,
+    limiter: access::Limiter,
 }
 
 pub struct Agent {
@@ -152,6 +167,7 @@ impl Agent {
                 "known": saved.map(|s| !s.key.is_empty()).unwrap_or(false),
                 "manual": saved.map(|s| s.manual).unwrap_or(false),
                 "sharing": d.sharing,
+                "short_id": net::short_id(id),
                 "displays": d.displays.iter().map(|(w, h)| json!([w, h])).collect::<Vec<_>>(),
             })
         }).collect();
@@ -162,13 +178,21 @@ impl Agent {
                             "trusted": false, "known": false, "manual": true, "sharing": true, "displays": []}))
             .collect();
         let requests: Vec<Value> = st.requests.iter().map(|r| json!({"req": r.req, "name": r.name, "platform": r.platform, "code": r.code, "monitor": r.monitor, "control": r.control})).collect();
-        let sessions: Vec<Value> = st.sessions.iter().map(|s| json!({"session": s.session, "dir": s.dir, "peer": s.peer, "monitor": s.monitor, "state": s.state, "code": s.code, "control": s.control, "show_on": s.show_on})).collect();
-        let me = json!({"id": self.id, "name": self.name, "platform": store::platform(), "port": self.port,
+        let sessions: Vec<Value> = st.sessions.iter().map(|s| json!({"session": s.session, "dir": s.dir, "peer": s.peer, "monitor": s.monitor, "state": s.state, "code": s.code, "control": s.control, "show_on": s.show_on, "via": s.via})).collect();
+        // Dispositivos con acceso a este equipo (emparejados o recordados).
+        let trusted: Vec<Value> = st.saved.iter().filter(|s| s.trusted && !s.key.is_empty())
+            .map(|s| json!({"key": s.key, "name": s.name, "platform": s.platform, "control": s.control, "last_seen": s.last_seen,
+                            "short_id": net::short_id(&id_of(&net::unhex(&s.key).unwrap_or_default()))}))
+            .collect();
+        let access = st.access.to_json();
+        let pairing = st.pairing.as_ref().filter(|p| !p.expired()).map(|p| json!({"code": p.code, "control": p.control, "secs": p.secs_left()}));
+        let me = json!({"id": self.id, "short_id": net::short_id(&self.id), "name": self.name, "platform": store::platform(), "port": self.port,
                         "sharing": self.sharing.load(Ordering::Relaxed), "capture": platform::capture_allowed(), "input": platform::input_allowed(),
                         "displays": self.displays.lock().unwrap().iter().map(|(w, h)| json!([w, h])).collect::<Vec<_>>()});
         drop(st);
         let all: Vec<Value> = devices.into_iter().chain(pending).collect();
-        self.emit(json!({"t": "link", "ev": "state", "me": me, "devices": all, "requests": requests, "sessions": sessions}));
+        self.emit(json!({"t": "link", "ev": "state", "me": me, "devices": all, "requests": requests, "sessions": sessions,
+                         "access": access, "pairing": pairing, "trusted": trusted}));
     }
 
     fn save(&self, st: &State) { store::save_devices(&st.saved); }
@@ -184,10 +208,50 @@ impl Agent {
         match s("cmd").as_str() {
             "state" => self.emit_state(),
             "connect" => {
-                let (id, monitor, show_on) = (s("id"), n("monitor").max(1) as usize, n("show_on") as usize);
+                let (mut id, monitor, show_on) = (s("id"), n("monitor").max(1) as usize, n("show_on") as usize);
                 let control = v.get("control").and_then(Value::as_bool).unwrap_or(true);
+                let auth = Some((s("auth"), s("secret"))).filter(|(k, _)| k == access::PASSWORD || k == access::PAIR);
+                // ID de 9 dígitos: se busca entre los equipos de la red.
+                if let Some(digits) = net::typed_short_id(&id) {
+                    let found = self.st.lock().unwrap().devices.keys().find(|k| net::digits(&net::short_id(k)) == digits).cloned();
+                    match found {
+                        Some(k) => id = k,
+                        None => return self.toast(format!("No encuentro el equipo con ID {} en tu red (¿tiene Kast abierto?)", net::short_id_fmt(&digits)), true),
+                    }
+                }
                 let a = self.clone();
-                std::thread::spawn(move || a.connect(&id, monitor, show_on, control));
+                std::thread::spawn(move || a.connect(&id, monitor, show_on, control, auth));
+            }
+            "access_set" => self.access_set(&v),
+            "pair_start" => {
+                let code = access::PairCode::new(b("control"));
+                store::log(&format!("código de emparejamiento creado ({})", if code.control { "ver y controlar" } else { "sólo ver" }));
+                self.st.lock().unwrap().pairing = Some(code);
+                self.emit_state();
+            }
+            "pair_cancel" => {
+                self.st.lock().unwrap().pairing = None;
+                self.emit_state();
+            }
+            "revoke" => {
+                let key = s("key");
+                let mut st = self.st.lock().unwrap();
+                let mut name = String::new();
+                if let Some(d) = st.saved.iter_mut().find(|d| d.key == key) {
+                    // Se conserva la clave (para detectar si cambia), pero ya no tiene acceso.
+                    d.trusted = false;
+                    d.control = false;
+                    name = d.name.clone();
+                }
+                self.save(&st);
+                for x in st.sessions.iter_mut().filter(|x| x.dir == "out" && x.peer_key == key) {
+                    x.stopped = true;
+                    if let Some(sock) = &x.sock { let _ = sock.shutdown(std::net::Shutdown::Both); }
+                }
+                drop(st);
+                store::log(&format!("acceso quitado a {name}"));
+                self.toast(format!("{name} ya no tiene acceso a este equipo"), false);
+                self.emit_state();
             }
             "add" => self.add(&s("addr")),
             "forget" => {
@@ -298,7 +362,7 @@ impl Agent {
                     a.toast(format!("{} no está en la red: no se pudo abrir su pantalla en tu monitor {}", w.name, w.show_on), true);
                     return;
                 }
-                a.connect(&w.dev, w.monitor, w.show_on, w.control);
+                a.connect(&w.dev, w.monitor, w.show_on, w.control, None);
             });
         }
     }
@@ -346,7 +410,7 @@ impl Agent {
 
     // ------------------------------------------------------------ yo veo a otro
 
-    fn connect(self: &Arc<Self>, id: &str, monitor: usize, show_on: usize, control: bool) {
+    fn connect(self: &Arc<Self>, id: &str, monitor: usize, show_on: usize, control: bool, auth: Option<(String, String)>) {
         let (addrs, name) = {
             let st = self.st.lock().unwrap();
             if let Some(a) = id.strip_prefix("ip:") {
@@ -365,9 +429,10 @@ impl Agent {
         if addrs.is_empty() { self.toast(format!("{name} no está disponible"), true); return }
         let session = self.id();
         self.st.lock().unwrap().sessions.push(Sess { session, dir: "in", peer: name.clone(), monitor, state: "connecting", code: String::new(), sock: None,
-                                                     stopped: false, control, dev: id.to_string(), show_on, want_control: control, files: None });
+                                                     stopped: false, control, dev: id.to_string(), show_on, want_control: control, files: None,
+                                                     via: "", peer_key: String::new() });
         self.emit_state();
-        let r = self.view(session, id, &addrs, &name, monitor, show_on, control);
+        let r = self.view(session, id, &addrs, &name, monitor, show_on, control, auth.as_ref());
         let _ = self.proxy.send_event(viewer::Event::Close(session));
         self.end_session(session);
         match r {
@@ -376,7 +441,9 @@ impl Agent {
         }
     }
 
-    fn view(self: &Arc<Self>, session: u64, id: &str, addrs: &[SocketAddr], name: &str, monitor: usize, show_on: usize, control: bool) -> Res<()> {
+    #[allow(clippy::too_many_arguments)]
+    fn view(self: &Arc<Self>, session: u64, id: &str, addrs: &[SocketAddr], name: &str, monitor: usize, show_on: usize, control: bool,
+            auth: Option<&(String, String)>) -> Res<()> {
         // La dirección conocida primero; si no responde, las demás desde las que se anunció.
         let (stream, addr) = addrs.iter().enumerate()
             .find_map(|(i, a)| TcpStream::connect_timeout(a, Duration::from_secs(if i == 0 { 4 } else { 2 })).ok().map(|s| (s, *a)))
@@ -392,14 +459,29 @@ impl Agent {
         let sock = ch.shutdown_handle()?;
         let code = ch.code.clone();
         self.set_session(session, |s| { s.state = "waiting"; s.code = code; s.sock = Some(sock); });
-        let req = json!({"name": self.name, "platform": store::platform(), "monitor": monitor, "control": control}).to_string();
+        let req = json!({"name": self.name, "platform": store::platform(), "monitor": monitor, "control": control,
+                         "auth": auth.map(|(k, _)| k.as_str())}).to_string();
         ch.send_typed(msg::REQUEST, req.as_bytes())?;
         let mut m = Vec::new();
-        ch.recv(&mut m).map_err(|_| "conexión cerrada")?;
-        match m.first() {
-            Some(&msg::ACCEPT) => {}
-            Some(&msg::REJECT) => return Err(String::from_utf8_lossy(&m[1..]).to_string().into()),
-            _ => return Err("respuesta inesperada".into()),
+        loop {
+            ch.recv(&mut m).map_err(|_| "conexión cerrada")?;
+            match m.first() {
+                Some(&msg::ACCEPT) => break,
+                // Contraseña o código: se demuestra que se conoce sin enviarlo (access.rs).
+                Some(&msg::CHALLENGE) => {
+                    let secret = auth.map(|(_, s)| s.as_str()).unwrap_or("");
+                    ch.send(&access::answer_challenge(&m[1..], secret, &ch.binding)?)?;
+                }
+                Some(&msg::REJECT) => {
+                    let (reason, need_auth) = access::reject_reason(&m[1..]);
+                    if need_auth {
+                        self.emit(json!({"t": "link", "ev": "need_auth", "id": id, "name": name, "monitor": monitor, "show_on": show_on,
+                                         "control": control, "failed": auth.is_some()}));
+                    }
+                    return Err(reason.into());
+                }
+                _ => return Err("respuesta inesperada".into()),
+            }
         }
         // ¿Concedió el control? Si no, la sesión es sólo de vista (con el motivo, si lo hay).
         let granted: Value = serde_json::from_slice(&m[1..]).unwrap_or(Value::Null);
@@ -425,7 +507,7 @@ impl Agent {
         ch.recv(&mut m).map_err(|_| format!("{name} cerró la conexión al empezar a transmitir (revisa Kast → Dispositivos en ese equipo)"))?;
         match m.first() {
             Some(&msg::HELLO) => {}
-            Some(&msg::REJECT) => return Err(String::from_utf8_lossy(&m[1..]).to_string().into()),
+            Some(&msg::REJECT) => return Err(access::reject_reason(&m[1..]).0.into()),
             _ => return Err("respuesta inesperada".into()),
         }
         let (w, h, fps) = stream::parse_hello(&m[1..]).ok_or("respuesta inesperada")?;
@@ -523,6 +605,7 @@ impl Agent {
         let plat: String = v.get("platform").and_then(Value::as_str).unwrap_or("").chars().take(16).collect();
         let monitor = v.get("monitor").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
         let wants_control = v.get("control").and_then(Value::as_bool).unwrap_or(false);
+        let auth = v.get("auth").and_then(Value::as_str).unwrap_or("").to_string();
         if !self.sharing.load(Ordering::Relaxed) {
             ch.send_typed(msg::REJECT, format!("{} no permite ver sus pantallas", self.name).as_bytes())?;
             return Ok(());
@@ -542,8 +625,25 @@ impl Agent {
         let key = net::hex(&ch.peer);
         let (trusted, mut control) = self.st.lock().unwrap().saved.iter().find(|s| s.key == key && s.trusted)
             .map(|s| (true, s.control)).unwrap_or((false, false));
-        // Se pregunta si no es de confianza o si pide un control que no tenía concedido (p. ej. recordado sólo para ver).
-        if !trusted || (wants_control && !control) {
+        let mut via = "trusted";
+        if auth == access::PASSWORD || auth == access::PAIR {
+            // Contraseña de acceso desatendido o código de emparejamiento: entra sin que nadie acepte.
+            match self.authenticate(&mut ch, &auth, &key, &name, &plat, peer_addr) {
+                Ok(allow) => { control = allow; via = if auth == access::PAIR { "pair" } else { "password" }; }
+                Err(e) => {
+                    ch.send_typed(msg::REJECT, &access::reject_body(&e, true))?;
+                    return Ok(());
+                }
+            }
+        } else if !trusted && self.st.lock().unwrap().access.reject_unknown {
+            // Sólo entran los emparejados o con la contraseña: no se molesta a nadie con la petición.
+            store::log(&format!("{name} pidió ver la pantalla {monitor}: rechazado (sólo dispositivos emparejados o con contraseña)"));
+            let why = format!("{} sólo acepta dispositivos emparejados o con la contraseña de acceso", self.name);
+            ch.send_typed(msg::REJECT, &access::reject_body(&why, true))?;
+            return Ok(());
+        } else if !trusted || (wants_control && !control) {
+            // Se pregunta si no es de confianza o si pide un control que no tenía concedido (p. ej. recordado sólo para ver).
+            via = "approved";
             // Hay que aceptar en este equipo: la app se muestra con la petición y el código.
             let req = self.id();
             let (tx, rx) = channel();
@@ -571,7 +671,7 @@ impl Agent {
                 let ip = peer_addr.map(|a| a.ip().to_string()).unwrap_or_default();
                 match st.saved.iter_mut().find(|s| s.key == key) {
                     Some(s) => { s.trusted = true; s.control = allow; s.name = name.clone(); s.platform = plat.clone(); }
-                    None => st.saved.push(Saved { key: key.clone(), name: name.clone(), platform: plat.clone(), addr: ip, trusted: true, manual: false, control: allow }),
+                    None => st.saved.push(Saved { key: key.clone(), name: name.clone(), platform: plat.clone(), addr: ip, trusted: true, manual: false, control: allow, last_seen: 0 }),
                 }
                 self.save(&st);
             }
@@ -596,11 +696,23 @@ impl Agent {
             }
         };
         ch.send_typed(msg::ACCEPT, json!({"control": control, "note": note}).to_string().as_bytes())?;
+        // Último acceso de los dispositivos con acceso (se ve en «Dispositivos con acceso»).
+        {
+            let mut st = self.st.lock().unwrap();
+            if let Some(d) = st.saved.iter_mut().find(|d| d.key == key && d.trusted) {
+                d.last_seen = store::now_secs();
+                self.save(&st);
+            }
+        }
+        if via == "password" {
+            self.toast(format!("{name} entró con la contraseña de acceso desatendido ({})", if control { "controla" } else { "sólo ve" }), false);
+        }
         let session = self.id();
         let sock = ch.shutdown_handle().ok();
         if let Some(s) = &sock { s.set_read_timeout(None)?; }
         self.st.lock().unwrap().sessions.push(Sess { session, dir: "out", peer: name.clone(), monitor, state: "live", code: ch.code.clone(), sock,
-                                                     stopped: false, control, dev: String::new(), show_on: 0, want_control: control, files: None });
+                                                     stopped: false, control, dev: String::new(), show_on: 0, want_control: control, files: None,
+                                                     via, peer_key: key.clone() });
         self.emit_state();
         store::log(&format!("{name} empieza a {} la pantalla {monitor}", if control { "controlar" } else { "ver" }));
         // El visor puede pedir un fotograma clave (p. ej. la app de iOS al abrir la sesión o si su decodificador falla).
@@ -672,6 +784,107 @@ impl Agent {
         Ok(())
     }
 
+    /// Contraseña o código: reto ligado a esta conexión (access.rs). Devuelve si puede controlar.
+    fn authenticate(&self, ch: &mut Secure, kind: &str, key: &str, name: &str, plat: &str, peer_addr: Option<SocketAddr>) -> Result<bool, String> {
+        let what = if kind == access::PASSWORD { "contraseña" } else { "código de emparejamiento" };
+        let (salt, pw_key) = {
+            let mut st = self.st.lock().unwrap();
+            if let Some(left) = st.limiter.blocked(key) {
+                return Err(format!("Demasiados intentos fallidos: espera {} min", left.as_secs() / 60 + 1));
+            }
+            if kind == access::PASSWORD {
+                let Some((salt, k)) = st.access.password_key() else { return Err(format!("{} no tiene activado el acceso desatendido", self.name)) };
+                (salt, Some(k))
+            } else {
+                if st.pairing.as_ref().is_none_or(|p| p.expired()) {
+                    st.pairing = None;
+                    return Err(format!("{} no tiene un código de emparejamiento activo (o ya caducó)", self.name));
+                }
+                (st.pairing.as_ref().unwrap().salt().to_vec(), None)
+            }
+        };
+        ch.send_typed(msg::CHALLENGE, json!({"kind": kind, "salt": net::hex(&salt)}).to_string().as_bytes()).map_err(|e| e.to_string())?;
+        let mut m = Vec::new();
+        ch.recv(&mut m).map_err(|_| format!("{name} no respondió al reto"))?;
+        let proof = if m.first() == Some(&msg::AUTH) {
+            serde_json::from_slice::<Value>(&m[1..]).ok().and_then(|v| v["proof"].as_str().and_then(net::unhex)).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let mut st = self.st.lock().unwrap();
+        let ok = match &pw_key {
+            Some(k) => access::verify(k, &ch.binding, &proof),
+            None => st.pairing.as_mut().is_some_and(|p| p.check(&ch.binding, &proof)),
+        };
+        if !ok {
+            st.limiter.fail(key);
+            if st.pairing.as_ref().is_some_and(|p| p.expired()) { st.pairing = None; }
+            drop(st);
+            store::log(&format!("{name}: {what} incorrecto/a"));
+            self.toast(format!("Intento fallido de {what} desde {name}"), true);
+            self.emit_state();
+            return Err(if kind == access::PASSWORD { "Contraseña incorrecta".into() } else { "Código incorrecto o caducado".into() });
+        }
+        st.limiter.ok(key);
+        let control = if kind == access::PASSWORD {
+            st.access.password_control
+        } else {
+            // Un solo uso: el dispositivo queda emparejado (acceso permanente con el permiso del código).
+            let code = st.pairing.take().unwrap();
+            let ip = peer_addr.map(|a| a.ip().to_string()).unwrap_or_default();
+            match st.saved.iter_mut().find(|s| s.key == key) {
+                Some(s) => { s.trusted = true; s.control = code.control; s.name = name.to_string(); s.platform = plat.to_string(); }
+                None => st.saved.push(Saved { key: key.to_string(), name: name.to_string(), platform: plat.to_string(), addr: ip,
+                                              trusted: true, manual: false, control: code.control, last_seen: 0 }),
+            }
+            self.save(&st);
+            code.control
+        };
+        drop(st);
+        if kind == access::PAIR {
+            store::log(&format!("{name} se emparejó con este equipo"));
+            self.toast(format!("{name} quedó emparejado: ya puede entrar sin preguntar"), false);
+        } else {
+            store::log(&format!("{name} entró con la contraseña de acceso desatendido"));
+        }
+        self.emit_state();
+        Ok(control)
+    }
+
+    /// Configuración de acceso desde la app.
+    fn access_set(&self, v: &Value) {
+        let mut st = self.st.lock().unwrap();
+        let mut cut_password = false;
+        if let Some(u) = v.get("unknown").and_then(Value::as_str) { st.access.reject_unknown = u == "reject"; }
+        if let Some(c) = v.get("unattended_control").and_then(Value::as_bool) {
+            cut_password |= st.access.password_control && !c;
+            st.access.password_control = c;
+        }
+        if let Some(pw) = v.get("password").and_then(Value::as_str) {
+            if let Err(e) = st.access.set_password(pw) {
+                drop(st);
+                return self.toast(e, true);
+            }
+            cut_password = true;
+            store::log("contraseña de acceso desatendido establecida");
+        }
+        if v.get("unattended") == Some(&Value::Bool(false)) && st.access.unattended() {
+            st.access.clear_password();
+            cut_password = true;
+            store::log("acceso desatendido desactivado");
+        }
+        st.access.save();
+        // Al cambiar o quitar la contraseña (o su permiso) se cortan las sesiones que entraron con ella.
+        if cut_password {
+            for x in st.sessions.iter_mut().filter(|x| x.dir == "out" && x.via == "password") {
+                x.stopped = true;
+                if let Some(sock) = &x.sock { let _ = sock.shutdown(std::net::Shutdown::Both); }
+            }
+        }
+        drop(st);
+        self.emit_state();
+    }
+
     // ------------------------------------------------------------ descubrimiento
 
     fn announce(&self) {
@@ -706,7 +919,14 @@ impl Agent {
             };
             // Permisos de macOS concedidos (o retirados) desde Ajustes del Sistema.
             let now = (platform::capture_allowed(), platform::input_allowed());
-            if changed || now != perms { perms = now; self.emit_state(); }
+            // Código de emparejamiento caducado.
+            let expired = {
+                let mut st = self.st.lock().unwrap();
+                let e = st.pairing.as_ref().is_some_and(|p| p.expired());
+                if e { st.pairing = None; }
+                e
+            };
+            if changed || expired || now != perms { perms = now; self.emit_state(); }
             tick += 1;
             std::thread::sleep(Duration::from_secs(2));
         }
@@ -772,7 +992,7 @@ pub fn run(port: u16) -> Res<()> {
         sharing: AtomicBool::new(sharing),
         next: AtomicU64::new(0),
         out: Mutex::new(std::io::stdout()),
-        st: Mutex::new(State { devices, saved, ..Default::default() }),
+        st: Mutex::new(State { devices, saved, access: access::Access::load(), ..Default::default() }),
         displays: Mutex::new(platform::displays().map(|v| v.iter().map(|d| (d.w, d.h)).collect()).unwrap_or_default()),
         proxy,
         udp: discovery::open()?,

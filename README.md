@@ -149,6 +149,15 @@ El portapapeles y los archivos sólo funcionan en sesiones con control.
 
 Desde **Dispositivos** se ven las sesiones activas y se pueden cortar, y el interruptor **Permitir que otros vean mis pantallas** desactiva las peticiones entrantes.
 
+**Acceso a este equipo** (Dispositivos → Acceso a este equipo)
+- **Tu ID:** 9 dígitos (por ejemplo `482 913 057`) para conectarte con **Conectar por ID**, sin buscar el equipo en la lista. De momento, dentro de la misma red; es la base para conectarse desde fuera.
+- **Dispositivos desconocidos:** «Preguntar» (cada petición se acepta en pantalla, comprobando el código de 6 dígitos) o «Rechazar» (sólo entran los emparejados o con la contraseña, sin interrumpirte).
+- **Emparejar un dispositivo:** genera un código de un solo uso (por ejemplo `K7QM-4ZP2`, válido 10 minutos) con el permiso que elijas (ver, o ver y controlar). En el otro dispositivo: **Contraseña o código** → Código. Desde entonces entra sin preguntar.
+- **Acceso desatendido:** una contraseña (mínimo 8 caracteres) para entrar sin que nadie acepte, con su permiso. Al cambiarla o desactivarla se cortan las sesiones que entraron con ella.
+- **Dispositivos con acceso:** los emparejados y recordados, con su permiso y su último acceso. **Quitar acceso** los obliga a volver a pedir permiso y corta su sesión.
+
+La contraseña y el código **nunca se envían**: el equipo manda una sal y el otro responde con una prueba (Argon2id + BLAKE2s-MAC) ligada a esa conexión concreta, que no sirve en ninguna otra. La contraseña se guarda sólo derivada con Argon2id. Tras 5 intentos fallidos en 10 minutos, ese dispositivo queda bloqueado 5 minutos, y cada fallo se avisa y se registra.
+
 **Permisos** (la primera vez)
 - Windows: el del firewall (puertos 47800 TCP y 47801 UDP, redes privadas). Las ventanas de administrador y los avisos de UAC no aceptan el control remoto, igual que en otras herramientas sin servicio del sistema.
 - Mac: **Red local** (para encontrar otros equipos), **Grabación de pantalla** (para compartir) y **Accesibilidad** (para que te controlen). Si falta alguno, Kast → Dispositivos muestra «Dar permiso».
@@ -170,7 +179,7 @@ Desde **Dispositivos** se ven las sesiones activas y se pueden cortar, y el inte
 | Latencia de la captura a la imagen lista | ~5-10 ms (+ red) |
 | Ancho de banda (escritorio) | 2-5 Mbps; hasta 20 Mbps con vídeo |
 
-- **Seguridad:** cada equipo tiene una identidad propia (X25519) y la conexión usa Noise XX (autenticación mutua + ChaCha20-Poly1305). El equipo que comparte siempre decide: acepta o rechaza cada petición, y ambos muestran el mismo código derivado del cifrado para descartar a alguien en medio. Si la identidad de un dispositivo conocido cambia, la conexión se bloquea.
+- **Seguridad:** cada equipo tiene una identidad propia (X25519) y la conexión usa Noise XX (autenticación mutua + ChaCha20-Poly1305). El equipo que comparte siempre decide: acepta cada petición, o deja entrar a los dispositivos que emparejó o a quien conozca su contraseña de acceso desatendido (comprobada sin enviarla, ligada a la conexión). Al aceptar, ambos muestran el mismo código derivado del cifrado para descartar a alguien en medio. Si la identidad de un dispositivo conocido cambia, la conexión se bloquea.
 - **Arquitectura:** la app arranca `kast-link agent`, que se comunica con ella por stdin/stdout (una línea JSON por mensaje), anuncia el equipo por UDP y abre las ventanas del visor.
 - **Todo nativo:** las APIs de captura y vídeo que ya trae cada sistema, sin códecs ni librerías externas. Escrito en Rust.
 - **Hoja de ruta:** cruce transparente del ratón entre monitores de distintos equipos, atajos del sistema también desde un visor en Mac (`Cmd+Tab`…), recibir archivos del otro equipo, pantallas virtuales (equipos sin monitor) y varias pantallas a la vez.

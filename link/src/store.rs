@@ -39,13 +39,14 @@ pub fn identity() -> Identity {
     id
 }
 
+/// Archivo sólo legible por el usuario (claves y contraseñas).
 #[cfg(unix)]
-fn restrict(p: &std::path::Path) {
+pub fn restrict(p: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600));
 }
 #[cfg(not(unix))]
-fn restrict(_: &std::path::Path) {}
+pub fn restrict(_: &std::path::Path) {}
 
 /// Nombre visible del equipo.
 pub fn device_name() -> String {
@@ -93,7 +94,11 @@ pub struct Saved {
     pub manual: bool,
     /// Además de ver, puede controlar teclado y ratón sin preguntar.
     pub control: bool,
+    /// Último acceso a este equipo (segundos desde 1970; 0 = nunca).
+    pub last_seen: u64,
 }
+
+pub fn now_secs() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) }
 
 /// Comprueba la identidad de un equipo al conectar: debe ser quien dice ser (`id` del anuncio, salvo los
 /// agregados por IP) y no puede haber cambiado desde la última vez (TOFU).
@@ -116,6 +121,7 @@ pub fn load_devices() -> Vec<Saved> {
             (f.len() >= 6).then(|| Saved {
                 key: f[0].into(), name: f[1].into(), platform: f[2].into(), addr: f[3].into(),
                 trusted: f[4] == "1", manual: f[5] == "1", control: f.get(6) == Some(&"1"),
+                last_seen: f.get(7).and_then(|x| x.parse().ok()).unwrap_or(0),
             })
         })
         .collect()
@@ -124,7 +130,7 @@ pub fn load_devices() -> Vec<Saved> {
 pub fn save_devices(list: &[Saved]) {
     let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");
     let body: String = list.iter()
-        .map(|d| format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\n", d.key, clean(&d.name), d.platform, d.addr, d.trusted as u8, d.manual as u8, d.control as u8))
+        .map(|d| format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n", d.key, clean(&d.name), d.platform, d.addr, d.trusted as u8, d.manual as u8, d.control as u8, d.last_seen))
         .collect();
     let _ = std::fs::create_dir_all(config_dir());
     let _ = std::fs::write(devices_path(), body);

@@ -14,6 +14,9 @@ bool kl_start(const char *dir, const char *name, void *ctx, kl_event_cb ev, kl_f
 // {"cmd":"refresh"} · {"cmd":"add","addr"} · {"cmd":"forget","id"} · {"cmd":"disconnect","session"}
 void kl_command(const char *json);
 uint64_t kl_connect(const char *id, uint32_t monitor, bool control);
+// Con la contraseña de acceso desatendido (auth = "password") o un código de emparejamiento (auth = "pair").
+// El secreto no se envía: sólo una prueba ligada a la conexión. `id` también puede ser el ID de 9 dígitos.
+uint64_t kl_connect_auth(const char *id, uint32_t monitor, bool control, const char *auth, const char *secret);
 
 // Pide un fotograma clave (al abrir la vista o si el decodificador falló).
 void kl_keyframe(uint64_t session);

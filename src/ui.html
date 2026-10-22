@@ -121,6 +121,18 @@ h2 { margin: 26px 0 10px; font-size: 14px; font-weight: 600; }
 .waiting .spin { width: 16px; height: 16px; margin: 0; border-width: 2px; flex: none; }
 .code { font: 600 26px/1 "Cascadia Mono", Consolas, ui-monospace, monospace; letter-spacing: 3px; padding: 12px 0; text-align: center; border-radius: 8px; background: var(--card2); border: 1px dashed var(--stroke); }
 .code.sm { display: inline-block; font-size: 15px; padding: 2px 8px; letter-spacing: 1px; }
+.access { padding-top: 4px; padding-bottom: 4px; }
+.access .arow { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
+.access .arow + .arow, .access .arow + .trusted { border-top: 1px solid var(--stroke); }
+.access .body { flex: 1; min-width: 0; }
+.access .title { font-weight: 600; }
+.access select { width: auto; min-width: 150px; }
+.access .code { padding: 6px 12px; font-size: 20px; }
+.access .trusted { padding: 12px 0 4px; }
+.access .trow { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.access .trow .body .sub { font-size: 12px; }
+.choice { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 12px; font-size: 13px; }
+.choice label { display: flex; align-items: center; gap: 8px; }
 .req { border-color: color-mix(in srgb, var(--accent) 55%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent); }
 .mon { display: flex; flex-direction: column; gap: 12px; transition: box-shadow .3s; }
 .mon.flash { box-shadow: 0 0 0 2px var(--accent); }
@@ -143,12 +155,12 @@ input[type=range]:hover::-webkit-slider-thumb { border-width: 4px; }
 input[type=range]:active::-webkit-slider-thumb { border-width: 6px; }
 input[type=range]:disabled { opacity: .4; }
 
-select, input[type=text], textarea { width: 100%; height: 32px; padding: 0 10px; border-radius: 5px; border: 1px solid var(--stroke); border-bottom-color: color-mix(in srgb, var(--text) 30%, transparent); background: var(--field); outline: none; color: var(--text); }
+select, input[type=text], input[type=password], textarea { width: 100%; height: 32px; padding: 0 10px; border-radius: 5px; border: 1px solid var(--stroke); border-bottom-color: color-mix(in srgb, var(--text) 30%, transparent); background: var(--field); outline: none; color: var(--text); }
 select { padding-right: 6px; }
 select option, select optgroup { background: var(--bg); color: var(--text); }
 textarea { height: auto; min-height: 88px; padding: 8px 10px; resize: vertical; font-family: "Cascadia Mono", Consolas, monospace; font-size: 12.5px; user-select: text; }
 input[type=text] { user-select: text; }
-select:focus, input[type=text]:focus, textarea:focus { border-bottom: 2px solid var(--accent); }
+select:focus, input[type=text]:focus, input[type=password]:focus, textarea:focus { border-bottom: 2px solid var(--accent); }
 
 .seg { display: inline-flex; align-self: flex-start; border: 1px solid var(--stroke); border-radius: 5px; overflow: hidden; background: var(--field); }
 .seg button { border: 0; background: none; padding: 0 10px; height: 30px; min-width: 44px; cursor: default; font-size: 12.5px; }
@@ -245,6 +257,7 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; m
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
   <symbol id="i-term" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M12 15h5"/></symbol>
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"/></symbol>
   <symbol id="i-phone" viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.2"/><path d="M11 18.5h2"/></symbol>
   <symbol id="i-devices" viewBox="0 0 24 24"><rect x="2" y="4" width="14" height="10" rx="1.5"/><path d="M6 18h6M9 14v4"/><rect x="17" y="8" width="5" height="11" rx="1.2"/></symbol>
   <symbol id="i-win" viewBox="0 0 24 24"><path d="M3 5.5 10.5 4.5v7H3zM12.5 4.2 21 3v8.5h-8.5zM3 12.5h7.5v7L3 18.5zM12.5 12.5H21V21l-8.5-1.2z" fill="currentColor" stroke="none"/></symbol>
@@ -317,8 +330,9 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; m
 
     <section id="tab-dispositivos">
       <div class="head"><h1>Conectar a dispositivo</h1><div class="grow"></div>
+        <button class="btn" id="devById"><svg class="i"><use href="#i-link"/></svg>Conectar por ID</button>
         <button class="btn primary" id="devAdd"><svg class="i"><use href="#i-plus"/></svg>Agregar dispositivo</button></div>
-      <p class="desc">Ve la pantalla de otro equipo con Kast (Windows o Mac) en tu red local. La conexión va cifrada y el otro equipo tiene que aceptarla.</p>
+      <p class="desc">Ve y controla otro equipo con Kast (Windows o Mac) en tu red local. La conexión va cifrada y el otro equipo la acepta, salvo que estés emparejado o uses su contraseña de acceso desatendido.</p>
       <div class="card note" id="linkMissing" hidden>Kast Link no está disponible en esta instalación (falta <span class="mono">kast-link</span> junto a Kast).</div>
       <div id="linkRequests" class="list"></div>
       <div class="card row" id="linkMe">
@@ -338,6 +352,35 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; m
         <div class="body"><div style="font-weight:600">Para que otros controlen este Mac, Kast necesita el permiso de Accesibilidad</div>
           <div class="sub">Pulsa «Dar permiso» y activa Kast en Ajustes del Sistema → Privacidad y seguridad → Accesibilidad. Si ya aparecía activado (pasa al actualizar Kast), «Dar permiso» quita la entrada antigua: vuelve a activarlo. Sin él, sólo podrán ver tus pantallas.</div></div>
         <button class="btn primary" id="inputPermBtn">Dar permiso</button>
+      </div>
+      <h2>Acceso a este equipo</h2>
+      <div class="card access" id="linkAccess">
+        <div class="arow">
+          <div class="body"><div class="title">Tu ID</div><div class="sub">Con este ID otros equipos te encuentran sin buscarte en la lista.</div></div>
+          <span class="code" id="meId">— — —</span>
+          <button class="btn ghost icon" id="copyId" title="Copiar el ID"><svg class="i"><use href="#i-copy"/></svg></button>
+        </div>
+        <div class="arow">
+          <div class="body"><div class="title">Dispositivos desconocidos</div>
+            <div class="sub">Con «Rechazar», sólo entran los emparejados o con la contraseña de acceso desatendido, y nadie te interrumpe con peticiones.</div></div>
+          <select id="accUnknown"><option value="ask">Preguntar</option><option value="reject">Rechazar</option></select>
+        </div>
+        <div class="arow">
+          <div class="body"><div class="title">Emparejar un dispositivo</div>
+            <div class="sub" id="pairSub">Un código de un solo uso da acceso permanente a un dispositivo, sin aceptar cada vez.</div></div>
+          <div class="dev-f" id="pairBox"></div>
+        </div>
+        <div class="arow">
+          <div class="body"><div class="title">Acceso desatendido</div>
+            <div class="sub" id="unSub">Entrar con una contraseña, sin que nadie acepte en este equipo.</div></div>
+          <div class="dev-f" id="unBox"></div>
+          <label class="switch" title="Acceso desatendido"><input type="checkbox" id="accUnattended"><span></span></label>
+        </div>
+        <div class="trusted" id="trustedWrap" hidden>
+          <div class="title">Dispositivos con acceso</div>
+          <div class="sub" style="margin-bottom:4px">Entran sin preguntar. Quítale el acceso a los que ya no uses.</div>
+          <div id="trustedList"></div>
+        </div>
       </div>
       <div id="linkSessionsWrap" hidden><h2>Sesiones activas</h2><div id="linkSessions" class="list"></div></div>
       <h2>Dispositivos</h2>
@@ -938,6 +981,7 @@ function onLink(m) {
   if (m.ev === 'missing') { $('#linkMissing').hidden = false; $('#meSub').textContent = 'No disponible'; return; }
   if (m.ev === 'toast') return toast(m.msg, m.err);
   if (m.ev === 'request' || m.ev === 'show') { showTab('dispositivos'); return; }
+  if (m.ev === 'need_auth') { authDialog({ id: m.id, name: m.name, monitor: m.monitor, show: m.show_on, control: m.control }, m.failed); return; }
   if (m.ev !== 'state') return;
   L = m;
   $('#linkMissing').hidden = true;
@@ -972,6 +1016,7 @@ function renderLink() {
   $('#linkPerm').hidden = !(me.capture === false && me.sharing);
   $('#linkInputPerm').hidden = !(me.input === false && me.sharing);
   $('#nlink').textContent = L.devices.filter(d => d.online).length || '';
+  renderAccess();
 
   // Peticiones (también en un diálogo)
   $('#linkRequests').innerHTML = '';
@@ -993,7 +1038,8 @@ function renderLink() {
     const text = s.dir === 'in'
       ? (s.state === 'live' ? `${s.control ? 'Controlando' : 'Viendo'} la pantalla ${s.monitor} de <b>${esc(s.peer)}</b>` : s.state === 'waiting'
         ? `Esperando que <b>${esc(s.peer)}</b> acepte · código <span class="code sm">${esc(s.code)}</span>` : `Conectando con <b>${esc(s.peer)}</b>…`)
-      : `<b>${esc(s.peer)}</b> está ${s.control ? 'controlando' : 'viendo'} tu pantalla ${s.monitor}`;
+      : `<b>${esc(s.peer)}</b> está ${s.control ? 'controlando' : 'viendo'} tu pantalla ${s.monitor}${
+        s.via === 'password' ? ' <span class="tag">con la contraseña de acceso desatendido</span>' : s.via === 'pair' ? ' <span class="tag">recién emparejado</span>' : ''}`;
     const c = el(`<div class="card row"><div class="ic dev-ic">${icon(s.dir === 'in' ? 'mon' : 'link')}</div>
       <div class="body">${text}</div>
       ${s.state === 'live' ? '<span class="status on">En vivo</span>' : '<div class="spin" style="width:16px;height:16px;margin:0;border-width:2px"></div>'}
@@ -1020,7 +1066,7 @@ function renderLink() {
       : '<option value="1">Pantalla 1</option>';
     const c = el(`<div class="card dev${d.online ? '' : ' off'}">
       <div class="dev-h"><div class="dev-ic">${platIcon(d.platform)}</div>
-        <div class="t"><div class="title">${esc(d.name)}</div><div class="sub">${esc(d.addr || '')}</div></div>
+        <div class="t"><div class="title">${esc(d.name)}</div><div class="sub">${[d.short_id ? 'ID ' + d.short_id : '', d.addr || ''].filter(Boolean).map(esc).join(' · ')}</div></div>
         <span class="status${d.online ? ' on' : ''}">${d.online ? 'En línea' : 'Sin conexión'}</span></div>
       <div>${tags}</div>
       ${d.online && !d.sharing ? '<div class="note">No permite que otros vean sus pantallas.</div>' : ''}
@@ -1032,6 +1078,7 @@ function renderLink() {
       ${waiting ? `<div class="waiting"><div class="spin"></div><div>${waiting.state === 'waiting'
         ? `Acepta en <b>${esc(d.name)}</b>. Código: <span class="code sm">${esc(waiting.code)}</span>` : 'Conectando…'}</div></div>` : ''}
       <div class="dev-f"><button class="btn primary" data-a="go"${d.online && d.sharing && !waiting ? '' : ' disabled'}>${icon('play')}Conectar</button>
+        <button class="btn" data-a="auth"${d.online && d.sharing && !waiting ? '' : ' disabled'} title="Conectar con la contraseña de acceso desatendido o con un código de emparejamiento">${icon('key')}Contraseña o código</button>
         <div class="grow"></div><button class="btn ghost" data-a="forget" title="Olvidar este dispositivo">${icon('trash')}</button></div>
     </div>`);
     const [ms, ss] = $$('select', c);
@@ -1040,6 +1087,7 @@ function renderLink() {
     ss.onchange = () => sel.show = +ss.value;
     $('[data-k=control]', c).onchange = e => sel.control = e.target.checked;
     $('[data-a=go]', c).onclick = () => linkCmd({ cmd: 'connect', id: d.id, monitor: sel.monitor, show_on: sel.show, control: sel.control });
+    $('[data-a=auth]', c).onclick = () => authDialog({ id: d.id, name: d.name, monitor: sel.monitor, show: sel.show, control: sel.control });
     $('[data-a=forget]', c).onclick = async () => {
       if (await modal({ title: 'Olvidar dispositivo', body: `<p>¿Olvidar <b>${esc(d.name)}</b>? Si podía ver tus pantallas, tendrá que volver a pedir permiso.</p>`, ok: 'Olvidar', danger: true }))
         linkCmd({ cmd: 'forget', id: d.id });
@@ -1047,6 +1095,158 @@ function renderLink() {
     box.appendChild(c);
   }
 }
+/* ---------- acceso a este equipo ---------- */
+let pairDeadline = 0, pairTimer = null;
+const fmtLeft = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+const fmtDate = t => t ? new Date(t * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'nunca';
+
+function renderAccess() {
+  const a = L.access || {}, me = L.me;
+  $('#meId').textContent = me.short_id || '—';
+  $('#accUnknown').value = a.unknown || 'ask';
+  // Emparejar: código activo con cuenta atrás, o permiso + «Generar código».
+  const pb = $('#pairBox');
+  if (L.pairing) {
+    pairDeadline = Date.now() + L.pairing.secs * 1000;
+    pb.innerHTML = `<span class="code">${esc(L.pairing.code)}</span><span class="sub" id="pairLeft" style="min-width:42px">${fmtLeft(pairDeadline - Date.now())}</span>
+      <button class="btn" id="pairCancel">Cancelar</button>`;
+    $('#pairSub').textContent = `En el otro dispositivo: «Contraseña o código» → Código, con el ID ${me.short_id}. Dará acceso para ${L.pairing.control ? 'ver y controlar' : 'sólo ver'}. Un solo uso.`;
+    $('#pairCancel').onclick = () => linkCmd({ cmd: 'pair_cancel' });
+    clearInterval(pairTimer);
+    pairTimer = setInterval(() => { const e = $('#pairLeft'); if (e) e.textContent = fmtLeft(pairDeadline - Date.now()); else clearInterval(pairTimer); }, 1000);
+  } else {
+    clearInterval(pairTimer);
+    pb.innerHTML = `<select id="pairPerm"><option value="1">Ver y controlar</option><option value="0">Sólo ver</option></select>
+      <button class="btn primary" id="pairStart">${icon('key')}Generar código</button>`;
+    $('#pairSub').textContent = 'Un código de un solo uso da acceso permanente a un dispositivo, sin aceptar cada vez.';
+    $('#pairStart').onclick = () => linkCmd({ cmd: 'pair_start', control: $('#pairPerm').value === '1' });
+  }
+  // Acceso desatendido
+  $('#accUnattended').checked = !!a.unattended;
+  const ub = $('#unBox');
+  if (a.unattended) {
+    ub.innerHTML = `<select id="unPerm"><option value="1">Ver y controlar</option><option value="0">Sólo ver</option></select>
+      <button class="btn" id="unChange">Cambiar contraseña</button>`;
+    $('#unPerm').value = a.unattended_control ? '1' : '0';
+    $('#unPerm').onchange = e => linkCmd({ cmd: 'access_set', unattended_control: e.target.value === '1' });
+    $('#unChange').onclick = () => passwordDialog(true);
+    $('#unSub').textContent = 'Activado: con la contraseña se entra sin que nadie acepte. Al cambiarla se cortan las sesiones que entraron con ella.';
+  } else {
+    ub.innerHTML = '';
+    $('#unSub').textContent = 'Entrar con una contraseña, sin que nadie acepte en este equipo.';
+  }
+  // Dispositivos con acceso
+  const tl = $('#trustedList'), list = L.trusted || [];
+  $('#trustedWrap').hidden = !list.length;
+  tl.innerHTML = '';
+  for (const t of list) {
+    const r = el(`<div class="trow"><div class="dev-ic">${platIcon(t.platform)}</div>
+      <div class="body"><div>${esc(t.name || 'Dispositivo')}</div>
+        <div class="sub">${[platName(t.platform), t.short_id ? 'ID ' + t.short_id : '', t.control ? 'ver y controlar' : 'sólo ver', 'último acceso: ' + fmtDate(t.last_seen)].filter(Boolean).map(esc).join(' · ')}</div></div>
+      <button class="btn">Quitar acceso</button></div>`);
+    $('button', r).onclick = async () => {
+      if (await modal({ title: 'Quitar acceso', body: `<p>¿Quitar el acceso a <b>${esc(t.name || 'este dispositivo')}</b>? Tendrá que volver a pedir permiso (o usar la contraseña o un código), y si está conectado se cortará la sesión.</p>`, ok: 'Quitar acceso', danger: true }))
+        linkCmd({ cmd: 'revoke', key: t.key });
+    };
+    tl.appendChild(r);
+  }
+}
+
+/** Contraseña de acceso desatendido (activar o cambiar). */
+async function passwordDialog(change) {
+  const m = await modal({
+    title: change ? 'Cambiar la contraseña de acceso desatendido' : 'Activar el acceso desatendido',
+    ok: change ? 'Cambiar' : 'Activar',
+    body: `<p class="sub">Con esta contraseña se puede entrar en este equipo sin que nadie acepte. Usa una que no uses en otro sitio: mínimo 8 caracteres.</p>
+      <label class="field">Contraseña<input type="password" id="pw1" autocomplete="new-password"></label>
+      <label class="field" style="margin-top:8px">Repítela<input type="password" id="pw2" autocomplete="new-password"></label>
+      ${change ? '' : `<label class="field" style="margin-top:8px">Permite<select id="pwPerm"><option value="1">Ver y controlar</option><option value="0">Sólo ver</option></select></label>`}
+      <div class="warn" id="pwErr"></div>`,
+    onOpen: m => $('#pw1', m).focus(),
+    validate: m => {
+      const a = $('#pw1', m).value, b = $('#pw2', m).value;
+      const err = a.length < 8 ? 'Mínimo 8 caracteres' : a !== b ? 'Las contraseñas no coinciden' : '';
+      $('#pwErr', m).textContent = err;
+      return !err;
+    },
+  });
+  if (!m) { renderAccess(); return; }
+  const o = { cmd: 'access_set', password: $('#pw1', m).value };
+  if (!change) o.unattended_control = $('#pwPerm', m).value === '1';
+  linkCmd(o);
+  toast(change ? 'Contraseña cambiada' : 'Acceso desatendido activado');
+}
+
+/** Conectar con la contraseña de acceso desatendido o con un código de emparejamiento. */
+async function authDialog(t, failed) {
+  showTab('dispositivos');
+  const m = await modal({
+    title: `Conectar a ${t.name}`, ok: 'Conectar',
+    body: `${failed === false ? `<p class="sub">${esc(t.name)} pide la contraseña de acceso desatendido o un código de emparejamiento.</p>` : ''}
+      <div class="choice">
+        <label><input type="radio" name="ak" value="password" checked>Contraseña de acceso desatendido</label>
+        <label><input type="radio" name="ak" value="pair">Código de emparejamiento (de un solo uso: queda emparejado)</label>
+      </div>
+      <label class="field"><span id="akLabel">Contraseña</span><input type="password" id="akSecret" autocomplete="off" spellcheck="false"></label>
+      <p class="sub" style="margin-top:8px">No se envía: Kast sólo demuestra que la conoces, ligado a esta conexión.</p>
+      <div class="warn" id="akErr">${failed ? 'No era correcta: inténtalo de nuevo.' : ''}</div>`,
+    onOpen: m => {
+      const s = $('#akSecret', m);
+      $$('input[name=ak]', m).forEach(r => r.onchange = () => {
+        const pair = $('input[name=ak]:checked', m).value === 'pair';
+        $('#akLabel', m).textContent = pair ? 'Código (p. ej. K7QM-4ZP2)' : 'Contraseña';
+        s.type = pair ? 'text' : 'password';
+        s.focus();
+      });
+      s.focus();
+    },
+    validate: m => !!$('#akSecret', m).value.trim(),
+  });
+  if (!m) return;
+  linkCmd({ cmd: 'connect', id: t.id, monitor: t.monitor || 1, show_on: t.show || 0, control: t.control !== false,
+            auth: $('input[name=ak]:checked', m).value, secret: $('#akSecret', m).value });
+}
+
+$('#accUnknown').onchange = e => linkCmd({ cmd: 'access_set', unknown: e.target.value });
+$('#accUnattended').onchange = async e => {
+  if (e.target.checked) return passwordDialog(false);
+  const ok = await modal({ title: 'Desactivar el acceso desatendido', body: '<p>Ya no se podrá entrar con la contraseña, y se cortarán las sesiones que entraron con ella.</p>', ok: 'Desactivar', danger: true });
+  if (ok) linkCmd({ cmd: 'access_set', unattended: false }); else renderAccess();
+};
+$('#copyId').onclick = () => { navigator.clipboard?.writeText(L?.me?.short_id || ''); toast('ID copiado'); };
+$('#devById').onclick = async () => {
+  const m = await modal({
+    title: 'Conectar por ID', ok: 'Conectar',
+    body: `<label class="field">ID del otro equipo (en él: Kast → Dispositivos → Tu ID)<input type="text" id="byId" placeholder="482 913 057" inputmode="numeric" spellcheck="false"></label>
+      <div class="choice" style="margin-top:12px">
+        <label><input type="radio" name="bk" value="" checked>Pedir permiso (el otro equipo acepta)</label>
+        <label><input type="radio" name="bk" value="password">Contraseña de acceso desatendido</label>
+        <label><input type="radio" name="bk" value="pair">Código de emparejamiento</label>
+      </div>
+      <label class="field" id="bySecretWrap" hidden><span id="byLabel">Contraseña</span><input type="password" id="bySecret" autocomplete="off" spellcheck="false"></label>
+      <p class="sub" style="margin-top:8px">De momento, el equipo tiene que estar en tu misma red.</p>
+      <div class="warn" id="byErr"></div>`,
+    onOpen: m => {
+      $$('input[name=bk]', m).forEach(r => r.onchange = () => {
+        const k = $('input[name=bk]:checked', m).value;
+        $('#bySecretWrap', m).hidden = !k;
+        $('#byLabel', m).textContent = k === 'pair' ? 'Código (p. ej. K7QM-4ZP2)' : 'Contraseña';
+        $('#bySecret', m).type = k === 'pair' ? 'text' : 'password';
+      });
+      $('#byId', m).focus();
+    },
+    validate: m => {
+      const id = $('#byId', m).value.replace(/[\s-]/g, ''), k = $('input[name=bk]:checked', m).value;
+      const err = !/^\d{9}$/.test(id) ? 'El ID tiene 9 dígitos' : k && !$('#bySecret', m).value.trim() ? (k === 'pair' ? 'Escribe el código' : 'Escribe la contraseña') : '';
+      $('#byErr', m).textContent = err;
+      return !err;
+    },
+  });
+  if (!m) return;
+  const k = $('input[name=bk]:checked', m).value;
+  linkCmd({ cmd: 'connect', id: $('#byId', m).value.trim(), monitor: 1, show_on: 0, control: true, ...(k ? { auth: k, secret: $('#bySecret', m).value } : {}) });
+};
+
 $('#meSharing').onchange = e => linkCmd({ cmd: 'sharing', enabled: e.target.checked });
 $('#permBtn').onclick = () => linkCmd({ cmd: 'request_capture' });
 $('#inputPermBtn').onclick = () => linkCmd({ cmd: 'request_input' });

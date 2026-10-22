@@ -6,7 +6,8 @@
 //!   kast-link id                                    nombre e identidad de este equipo
 //!   kast-link record [-m N | --pattern] [--frames 120] <archivo>   grabar un flujo H.264 (pruebas)
 //!   kast-link play <archivo> [--dump imagen.bmp]                   decodificar un flujo grabado (pruebas)
-//!   kast-link probe <ip:puerto> [--home dir] [--secs 10] [--text t] [--clip t]   cliente de iOS desde la terminal (pruebas)
+//!   kast-link probe <ip:puerto> [--home dir] [--secs 10] [--text t] [--clip t] [--password p | --pair código]
+//!                                                   cliente de iOS desde la terminal (pruebas)
 use kast_link::{Res, agent, mobile, platform, store, stream};
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
@@ -87,6 +88,7 @@ fn run() -> Res<()> {
 static FRAMES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static KEYFRAMES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static LIVE: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
+static ENDED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 extern "C" fn probe_event(_: *mut std::ffi::c_void, json: *const std::ffi::c_char) {
     let s = unsafe { std::ffi::CStr::from_ptr(json) }.to_string_lossy().into_owned();
@@ -94,6 +96,7 @@ extern "C" fn probe_event(_: *mut std::ffi::c_void, json: *const std::ffi::c_cha
     println!("{s}");
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
         if v["state"] == "live" && v["control"] == true { *LIVE.lock().unwrap() = v["session"].as_u64(); }
+        if v["state"] == "ended" { *ENDED.lock().unwrap() = Some(v["error"].as_str().unwrap_or("").to_string()); }
     }
 }
 
@@ -115,11 +118,20 @@ fn probe(o: &Opts) -> Res<()> {
         return Err("no se pudo iniciar el cliente".into());
     }
     let id = CString::new(format!("ip:{addr}"))?;
-    let session = unsafe { mobile::kl_connect(id.as_ptr(), o.num(&["-m", "--monitor"], 1), true) };
+    let monitor = o.num(&["-m", "--monitor"], 1);
+    let session = match (o.get(&["--password"]), o.get(&["--pair"])) {
+        (Some(p), _) => { let (k, s) = (CString::new("password")?, CString::new(p)?); unsafe { mobile::kl_connect_auth(id.as_ptr(), monitor, true, k.as_ptr(), s.as_ptr()) } }
+        (_, Some(p)) => { let (k, s) = (CString::new("pair")?, CString::new(p)?); unsafe { mobile::kl_connect_auth(id.as_ptr(), monitor, true, k.as_ptr(), s.as_ptr()) } }
+        _ => unsafe { mobile::kl_connect(id.as_ptr(), monitor, true) },
+    };
     let t0 = Instant::now();
     let (mut sent, mut asked) = (false, 0);
     while t0.elapsed() < Duration::from_secs(secs) {
         std::thread::sleep(Duration::from_millis(200));
+        // La sesión terminó (rechazada, contraseña incorrecta…): no hay nada más que esperar.
+        if let Some(e) = ENDED.lock().unwrap().clone() {
+            return Err(if e.is_empty() { "la sesión terminó".into() } else { e.into() });
+        }
         // Pide fotogramas clave como la app (con la pantalla quieta, macOS no manda otros por su cuenta).
         if FRAMES.load(Ordering::Relaxed) > 0 && t0.elapsed() > Duration::from_secs(4 + 4 * asked) && asked < 2 {
             mobile::kl_keyframe(session);

@@ -3,14 +3,14 @@
 //!
 //! Eventos (callback `ev`, desde hilos en segundo plano):
 //!   {"ev":"devices","devices":[{"id","name","platform","addr","online","sharing","known","displays":[[w,h]…]}]}
-//!   {"ev":"session","session":n,"state":"connecting|waiting|live|ended","peer","code","control","w","h","error","note"}
+//!   {"ev":"session","session":n,"state":"connecting|waiting|live|ended","peer","code","control","w","h","error","note","need_auth"}
 //!   {"ev":"clip","session":n,"text":"…"} o {"ev":"clip","session":n,"png":"base64"}
 //!   {"ev":"toast","msg":"…","err":bool}
 use crate::discovery::{self, Packet};
 use crate::input::{Event, MAX_TEXT};
 use crate::net::{Identity, Secure, msg};
 use crate::store::{self, Saved};
-use crate::{Res, h264};
+use crate::{Res, access, h264};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_void};
@@ -81,12 +81,12 @@ impl Client {
         let known = |id: &str| saved.iter().any(|s| !s.key.is_empty() && crate::net::id_of(&crate::net::unhex(&s.key).unwrap_or_default()) == id);
         let mut list: Vec<Value> = devs.iter().map(|(id, d)| json!({
             "id": id, "name": d.name, "platform": d.platform, "addr": d.addr.to_string(),
-            "online": d.seen.elapsed() < ONLINE, "sharing": d.sharing, "known": known(id),
+            "online": d.seen.elapsed() < ONLINE, "sharing": d.sharing, "known": known(id), "short_id": crate::net::short_id(id),
             "displays": d.displays.iter().map(|(w, h)| json!([w, h])).collect::<Vec<_>>(),
         })).collect();
         // Agregados por IP que aún no respondieron.
         for s in saved.iter().filter(|s| s.manual && !devs.values().any(|d| d.addr.to_string() == s.addr || s.addr.starts_with(&format!("{}:", d.addr.ip())))) {
-            list.push(json!({"id": format!("ip:{}", s.addr), "name": s.addr, "platform": "", "addr": s.addr, "online": false, "sharing": true, "known": false, "displays": []}));
+            list.push(json!({"id": format!("ip:{}", s.addr), "name": s.addr, "platform": "", "addr": s.addr, "online": false, "sharing": true, "known": false, "short_id": "", "displays": []}));
         }
         list.sort_by_key(|v| (!v["online"].as_bool().unwrap_or(false), v["name"].as_str().unwrap_or("").to_lowercase()));
         drop((devs, saved));
@@ -180,8 +180,12 @@ impl Client {
 
     // ------------------------------------------------------------ sesión
 
-    fn connect(self: &Arc<Self>, id: &str, monitor: usize, control: bool) -> u64 {
+    fn connect(self: &Arc<Self>, id: &str, monitor: usize, control: bool, auth: Option<(String, String)>) -> u64 {
         let session = self.next.fetch_add(1, Ordering::Relaxed) + 1;
+        // ID de 9 dígitos: se busca entre los equipos de la red.
+        let resolved = crate::net::typed_short_id(id)
+            .and_then(|digits| self.devices.lock().unwrap().keys().find(|k| crate::net::digits(&crate::net::short_id(k)) == digits).cloned());
+        let id = resolved.as_deref().unwrap_or(id);
         let (addr, name) = match id.strip_prefix("ip:") {
             Some(a) => (a.parse::<SocketAddr>().ok(), a.to_string()),
             None => match self.devices.lock().unwrap().get(id) { Some(d) => (Some(d.addr), d.name.clone()), None => (None, id.to_string()) },
@@ -190,18 +194,21 @@ impl Client {
         self.session_ev(session, "connecting", json!({"peer": name}));
         let (a, id) = (self.clone(), id.to_string());
         std::thread::spawn(move || {
+            let mut need_auth = false;
             let r = match addr {
-                Some(addr) => a.view(session, &id, addr, &name, monitor, control),
+                Some(addr) => a.view(session, &id, addr, &name, monitor, control, auth.as_ref(), &mut need_auth),
                 None => Err(format!("{name} no está disponible").into()),
             };
             let stopped = a.sessions.lock().unwrap().remove(&session).is_none();
             let error = match r { Err(e) if !stopped => e.to_string(), _ => String::new() };
-            a.session_ev(session, "ended", json!({"peer": name, "error": error}));
+            a.session_ev(session, "ended", json!({"peer": name, "error": error, "need_auth": need_auth}));
         });
         session
     }
 
-    fn view(&self, session: u64, id: &str, addr: SocketAddr, name: &str, monitor: usize, control: bool) -> Res<()> {
+    #[allow(clippy::too_many_arguments)]
+    fn view(&self, session: u64, id: &str, addr: SocketAddr, name: &str, monitor: usize, control: bool,
+            auth: Option<&(String, String)>, need_auth: &mut bool) -> Res<()> {
         let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(|_| format!("{name} no responde"))?;
         let mut ch = Secure::connect(stream, &self.me)?;
         store::check_peer(&self.saved.lock().unwrap(), id, &ch.peer)?;
@@ -211,14 +218,26 @@ impl Client {
             sess.sock = Some(ch.shutdown_handle()?);
         }
         self.session_ev(session, "waiting", json!({"peer": name, "code": ch.code}));
-        let req = json!({"name": self.name, "platform": "ios", "monitor": monitor, "control": control}).to_string();
+        let req = json!({"name": self.name, "platform": "ios", "monitor": monitor, "control": control,
+                         "auth": auth.map(|(k, _)| k.as_str())}).to_string();
         ch.send_typed(msg::REQUEST, req.as_bytes())?;
         let mut m = Vec::new();
-        ch.recv(&mut m).map_err(|_| "conexión cerrada")?;
-        match m.first() {
-            Some(&msg::ACCEPT) => {}
-            Some(&msg::REJECT) => return Err(String::from_utf8_lossy(&m[1..]).to_string().into()),
-            _ => return Err("respuesta inesperada".into()),
+        loop {
+            ch.recv(&mut m).map_err(|_| "conexión cerrada")?;
+            match m.first() {
+                Some(&msg::ACCEPT) => break,
+                // Contraseña o código: se demuestra que se conoce sin enviarlo (access.rs).
+                Some(&msg::CHALLENGE) => {
+                    let secret = auth.map(|(_, s)| s.as_str()).unwrap_or("");
+                    ch.send(&access::answer_challenge(&m[1..], secret, &ch.binding)?)?;
+                }
+                Some(&msg::REJECT) => {
+                    let (reason, auth_needed) = access::reject_reason(&m[1..]);
+                    *need_auth = auth_needed;
+                    return Err(reason.into());
+                }
+                _ => return Err("respuesta inesperada".into()),
+            }
         }
         let granted: Value = serde_json::from_slice(&m[1..]).unwrap_or(Value::Null);
         let got_control = control && granted.get("control").and_then(Value::as_bool).unwrap_or(false);
@@ -236,7 +255,7 @@ impl Client {
         }
         ch.recv(&mut m).map_err(|_| format!("{name} cerró la conexión al empezar a transmitir"))?;
         if m.first() != Some(&msg::HELLO) {
-            return Err(if m.first() == Some(&msg::REJECT) { String::from_utf8_lossy(&m[1..]).to_string() } else { "respuesta inesperada".into() }.into());
+            return Err(if m.first() == Some(&msg::REJECT) { access::reject_reason(&m[1..]).0 } else { "respuesta inesperada".into() }.into());
         }
         let b = &m[1..];
         let rd = |i: usize| b.get(i..i + 4).map(|x| u32::from_be_bytes(x.try_into().unwrap())).unwrap_or(0);
@@ -394,11 +413,21 @@ pub unsafe extern "C" fn kl_command(json: *const c_char) {
     }
 }
 
-/// Conecta con un equipo (`id` del anuncio o "ip:addr:puerto"); devuelve el número de sesión.
+/// Conecta con un equipo (`id` del anuncio, su ID de 9 dígitos o "ip:addr:puerto"); devuelve el número de sesión.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kl_connect(id: *const c_char, monitor: u32, control: bool) -> u64 {
     let Some(c) = client() else { return 0 };
-    c.connect(&unsafe { cstr(id) }, monitor.max(1) as usize, control)
+    c.connect(&unsafe { cstr(id) }, monitor.max(1) as usize, control, None)
+}
+
+/// Como kl_connect, con la contraseña de acceso desatendido (`auth` = "password") o un código de
+/// emparejamiento (`auth` = "pair"). El secreto no se envía: sólo una prueba ligada a la conexión.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kl_connect_auth(id: *const c_char, monitor: u32, control: bool, auth: *const c_char, secret: *const c_char) -> u64 {
+    let Some(c) = client() else { return 0 };
+    let (auth, secret) = unsafe { (cstr(auth), cstr(secret)) };
+    let auth = (auth == access::PASSWORD || auth == access::PAIR).then_some((auth, secret));
+    c.connect(&unsafe { cstr(id) }, monitor.max(1) as usize, control, auth)
 }
 
 /// Pide al otro equipo un fotograma clave (al abrir la vista o si el decodificador falló).

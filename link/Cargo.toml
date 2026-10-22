@@ -7,6 +7,9 @@ license = "MIT"
 repository = "https://github.com/AbrahmCh1/Kast"
 
 [dependencies]
+# Contraseña de acceso desatendido y códigos de emparejamiento (Argon2id + BLAKE2s-MAC), en Rust puro.
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
+blake2 = "0.10"
 getrandom = "0.4.3"
 if-addrs = "0.15.0"
 # Imágenes del portapapeles compartido (PNG), en Rust puro.

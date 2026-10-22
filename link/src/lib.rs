@@ -1,5 +1,6 @@
 //! Núcleo de Kast Link: protocolo cifrado, descubrimiento, vídeo y entrada. Lo usan el binario
 //! `kast-link` (agente de escritorio en Windows y macOS) y la app de iOS (biblioteca estática, ver mobile.rs).
+pub mod access;
 pub mod discovery;
 pub mod h264;
 pub mod input;

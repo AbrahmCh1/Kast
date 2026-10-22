@@ -38,6 +38,10 @@ pub mod msg {
     pub const ACCEPT: u8 = 11;
     /// anfitrión -> visor: petición rechazada (texto con el motivo)
     pub const REJECT: u8 = 12;
+    /// anfitrión -> visor: demuestra que conoces la contraseña o el código, JSON {"kind": "password"|"pair", "salt": hex}
+    pub const CHALLENGE: u8 = 14;
+    /// visor -> anfitrión: JSON {"proof": hex} = MAC(Argon2id(secreto, salt), binding) (ver access.rs)
+    pub const AUTH: u8 = 15;
 }
 
 fn err(e: impl std::fmt::Display) -> io::Error { io::Error::other(e.to_string()) }
@@ -68,6 +72,26 @@ impl Identity {
 
 pub fn id_of(public: &[u8]) -> String { hex(&public[..8.min(public.len())]) }
 
+/// ID de 9 dígitos para mostrar y escribir ("482 913 057"), derivado del identificador (`id_of`).
+pub fn short_id(id: &str) -> String {
+    let n = unhex(id).filter(|b| b.len() >= 8).map(|b| u64::from_be_bytes(b[..8].try_into().unwrap()) % 1_000_000_000).unwrap_or(0);
+    format!("{:03} {:03} {:03}", n / 1_000_000, n / 1000 % 1000, n % 1000)
+}
+
+/// 9 dígitos con el formato del ID ("482913057" -> "482 913 057").
+pub fn short_id_fmt(d: &str) -> String {
+    if d.len() == 9 { format!("{} {} {}", &d[..3], &d[3..6], &d[6..]) } else { d.to_string() }
+}
+
+/// Sólo los dígitos de un ID escrito por el usuario ("482-913 057" -> "482913057").
+pub fn digits(s: &str) -> String { s.chars().filter(char::is_ascii_digit).collect() }
+
+/// ¿Es un ID de 9 dígitos escrito por el usuario (sólo números, espacios o guiones)? Así no se confunde con el
+/// identificador interno (hexadecimal), que al quitarle las letras podría dejar 9 dígitos por casualidad.
+pub fn typed_short_id(s: &str) -> Option<String> {
+    (s.chars().all(|c| c.is_ascii_digit() || c == ' ' || c == '-') && digits(s).len() == 9).then(|| digits(s))
+}
+
 /// Código de 6 dígitos que ambos lados muestran tras el intercambio.
 fn pairing_code(hash: &[u8]) -> String {
     let n = u32::from_be_bytes([hash[0], hash[1], hash[2], hash[3]]) % 1_000_000;
@@ -84,6 +108,9 @@ pub struct Secure {
     pub peer: Vec<u8>,
     /// Código de verificación de esta conexión.
     pub code: String,
+    /// Hash del intercambio Noise: único de esta conexión. Las pruebas de contraseña y de código se ligan a él,
+    /// así que no sirven en otra conexión (p. ej. de alguien que reenvíe el tráfico entre los dos equipos).
+    pub binding: Vec<u8>,
 }
 
 fn send_raw(s: &mut TcpStream, data: &[u8]) -> io::Result<()> {
@@ -104,7 +131,8 @@ impl Secure {
     fn finish(stream: TcpStream, hs: snow::HandshakeState) -> io::Result<Self> {
         let peer = hs.get_remote_static().ok_or_else(|| err("el otro equipo no envió su identidad"))?.to_vec();
         let code = pairing_code(hs.get_handshake_hash());
-        Ok(Self { stream, noise: Arc::new(Mutex::new(hs.into_transport_mode().map_err(err)?)), rbuf: Vec::new(), wbuf: vec![0u8; 65535], peer, code })
+        let binding = hs.get_handshake_hash().to_vec();
+        Ok(Self { stream, noise: Arc::new(Mutex::new(hs.into_transport_mode().map_err(err)?)), rbuf: Vec::new(), wbuf: vec![0u8; 65535], peer, code, binding })
     }
 
     /// Lado que se conecta (visor).
@@ -144,7 +172,7 @@ impl Secure {
 
     /// Otra referencia al mismo canal (para un segundo hilo).
     pub fn try_clone(&self) -> io::Result<Self> {
-        Ok(Self { stream: self.stream.try_clone()?, noise: self.noise.clone(), rbuf: Vec::new(), wbuf: vec![0u8; 65535], peer: self.peer.clone(), code: self.code.clone() })
+        Ok(Self { stream: self.stream.try_clone()?, noise: self.noise.clone(), rbuf: Vec::new(), wbuf: vec![0u8; 65535], peer: self.peer.clone(), code: self.code.clone(), binding: self.binding.clone() })
     }
 
     pub fn send(&mut self, plain: &[u8]) -> io::Result<()> {
