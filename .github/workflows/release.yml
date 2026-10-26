@@ -151,21 +151,9 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
           if [ -z "$ASC_KEY_P8" ]; then echo "::warning::firmada pero sin notarizar: faltan los secretos ASC_*"; exit 0; fi
-          KEY="$RUNNER_TEMP/AuthKey.p8"
-          printf '%s\n' "$ASC_KEY_P8" > "$KEY"
-          ditto -c -k --keepParent mac/build/Kast.app "$RUNNER_TEMP/notarizar.zip"
-          xcrun notarytool submit "$RUNNER_TEMP/notarizar.zip" --key "$KEY" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
-            --wait --timeout 30m --output-format json | tee "$RUNNER_TEMP/notary.json"
-          rm -f "$KEY"
-          if ! grep -q '"status" *: *"Accepted"' "$RUNNER_TEMP/notary.json"; then
-            SUB="$(sed -n 's/.*"id" *: *"\([^"]*\)".*/\1/p' "$RUNNER_TEMP/notary.json" | head -1)"
-            printf '%s\n' "$ASC_KEY_P8" > "$KEY"
-            [ -n "$SUB" ] && xcrun notarytool log "$SUB" --key "$KEY" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
-            rm -f "$KEY"
-            echo "::error::Apple rechazó la notarización"; exit 1
-          fi
-          xcrun stapler staple mac/build/Kast.app
+          bash mac/notarize.sh mac/build/Kast.app
           spctl --assess --type execute -vv mac/build/Kast.app
+          echo "KAST_NOTARIZED=1" >> "$GITHUB_ENV"
 
       - name: Prueba de humo
         run: |
@@ -203,8 +191,43 @@ jobs:
           NAME="Kast-$VERSION-macos"
           mkdir -p dist
           ditto -c -k --keepParent mac/build/Kast.app "dist/$NAME.zip"
-          (cd dist && shasum -a 256 "$NAME.zip" > "$NAME.zip.sha256")
+          # Imagen de disco: se abre y se arrastra Kast a Aplicaciones.
+          SRC="$RUNNER_TEMP/dmg"
+          mkdir -p "$SRC"
+          ditto mac/build/Kast.app "$SRC/Kast.app"
+          ln -s /Applications "$SRC/Aplicaciones"
+          # hdiutil falla a veces en los runners con «Resource busy»: se reintenta.
+          for i in 1 2 3; do
+            hdiutil create -volname Kast -srcfolder "$SRC" -fs HFS+ -format UDZO -ov "dist/$NAME.dmg" && break
+            sleep 5
+          done
+          test -f "dist/$NAME.dmg"
+          if [ -n "${KAST_SIGN_ID:-}" ]; then codesign --sign "$KAST_SIGN_ID" --timestamp "dist/$NAME.dmg"; fi
           echo "PKG=$NAME" >> "$GITHUB_ENV"
+
+      - name: Notarizar la imagen de disco
+        if: env.KAST_NOTARIZED == '1'
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          bash mac/notarize.sh "dist/$PKG.dmg"
+          spctl --assess --type open --context context:primary-signature -vv "dist/$PKG.dmg"
+
+      - name: Comprobar la imagen de disco
+        run: |
+          DMG="dist/$PKG.dmg"
+          hdiutil verify "$DMG"
+          MNT="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$DMG"
+          ls -la "$MNT"
+          test -L "$MNT/Aplicaciones"
+          codesign --verify --strict --verbose "$MNT/Kast.app"
+          test "$("$MNT/Kast.app/Contents/MacOS/Kast" version)" = "kast $VERSION"
+          if [ "${KAST_NOTARIZED:-}" = 1 ]; then xcrun stapler validate "$MNT/Kast.app"; xcrun stapler validate "$DMG"; fi
+          hdiutil detach "$MNT" || hdiutil detach -force "$MNT"
+          (cd dist && for f in "$PKG.zip" "$PKG.dmg"; do shasum -a 256 "$f" > "$f.sha256"; done)
 
       - uses: actions/upload-artifact@v4
         with:
@@ -212,6 +235,8 @@ jobs:
           path: |
             dist/${{ env.PKG }}.zip
             dist/${{ env.PKG }}.zip.sha256
+            dist/${{ env.PKG }}.dmg
+            dist/${{ env.PKG }}.dmg.sha256
 
       - name: Borrar el llavero temporal
         if: always() && env.KAST_KEYCHAIN != ''

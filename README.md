@@ -105,8 +105,8 @@ App nativa en Swift que vive en la **barra de menús**: control de brillo por mo
 
 ## Instalar
 
-1. Descarga `Kast-<versión>-macos.zip` de [Releases](https://github.com/AbrahmCh1/Kast/releases), descomprímelo y mueve **Kast.app** a *Aplicaciones*.
-2. Ábrela: está **firmada con Developer ID y notarizada por Apple**, así que se abre sin avisos, y los permisos que le des (Grabación de pantalla, Accesibilidad) se conservan al actualizar.
+1. Descarga `Kast-<versión>-macos.dmg` de [Releases](https://github.com/AbrahmCh1/Kast/releases), ábrelo y arrastra **Kast** a *Aplicaciones*. También está el `.zip` (el único formato hasta la 1.5.0): descomprímelo y mueve **Kast.app** a *Aplicaciones*.
+2. Ábrela: la app y la imagen de disco están **firmadas con Developer ID y notarizadas por Apple**, así que se abren sin avisos, y los permisos que le des (Grabación de pantalla, Accesibilidad) se conservan al actualizar.
 3. Para usar la CLI desde la terminal:
 
 ```bash
@@ -266,7 +266,7 @@ tools/          generador de los iconos (make-icon.ps1)
 third_party/    SDK de WebView2 (licencia BSD de Microsoft)
 ```
 
-Las versiones se publican automáticamente al subir una etiqueta `v*`: GitHub Actions compila Windows, macOS e iOS, prueba Kast Link de punta a punta, firma y notariza la app de macOS y adjunta los paquetes de Windows y macOS al Release.
+Las versiones se publican automáticamente al subir una etiqueta `v*`: GitHub Actions compila Windows, macOS e iOS, prueba Kast Link de punta a punta, firma y notariza la app de macOS y su imagen de disco y adjunta los paquetes de Windows (`.zip`) y macOS (`.dmg` y `.zip`) al Release.
 
 ## Licencia
 
