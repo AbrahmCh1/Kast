@@ -262,11 +262,22 @@ mac/Sources/    macOS: app de la barra de menús en Swift (mismo lenguaje de com
 link/           Kast Link en Rust: biblioteca (protocolo, cifrado, acceso, vídeo, entrada) y agente de escritorio
 ios/            app de iOS (SwiftUI + UIKit) sobre el núcleo de Kast Link
 assets/         logo (kast.svg) e iconos generados
+site/           página web (HTML estático, lista para Vercel)
 tools/          generador de los iconos (make-icon.ps1)
 third_party/    SDK de WebView2 (licencia BSD de Microsoft)
 ```
 
 Las versiones se publican automáticamente al subir una etiqueta `v*`: GitHub Actions compila Windows, macOS e iOS, prueba Kast Link de punta a punta, firma y notariza la app de macOS y su imagen de disco y adjunta los paquetes de Windows (`.zip`) y macOS (`.dmg` y `.zip`) al Release.
+
+## Página web
+
+`site/` es la página de Kast: un único HTML estático, sin dependencias ni paso de compilación. Los botones de descarga apuntan siempre a la última versión, consultando la API de GitHub desde el navegador; si no responde, llevan a la página de Releases.
+
+- **Vercel, desde GitHub:** *Add New → Project*, importa este repositorio, pon **Root Directory** = `site` y pulsa *Deploy* (Framework: *Other*, sin comando de compilación). Cada push a `main` la vuelve a publicar.
+- **Vercel, desde la terminal:** `npx vercel deploy site --prod`.
+- **En local:** `python -m http.server -d site 8000` y abre <http://localhost:8000>.
+
+`site/vercel.json` añade las cabeceras de seguridad (CSP incluida) y la caché de los iconos.
 
 ## Licencia
 
