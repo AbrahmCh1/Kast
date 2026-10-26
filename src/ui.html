@@ -151,6 +151,9 @@ h2 { margin: 26px 0 10px; font-size: 14px; font-weight: 600; }
 .screens .srow select:disabled { opacity: .45; }
 .cal-row { display: grid; grid-template-columns: 110px 1fr 38px; align-items: center; gap: 10px; }
 .cal-row output { text-align: right; color: var(--sub); font-variant-numeric: tabular-nums; }
+.cal-row.fine { grid-template-columns: 92px 26px 1fr 26px 30px; gap: 6px; }
+.cal-row.fine .btn.icon { width: 26px; height: 26px; font-size: 15px; line-height: 1; }
+.cal-row.auto > span { color: var(--faint); }
 .seg button:disabled { opacity: .45; }
 #ctab button { display: inline-flex; align-items: center; gap: 6px; padding: 0 14px; }
 .field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--sub); min-width: 0; }
@@ -670,8 +673,9 @@ function resync() {
   }, 900);
 }
 /* Calibración por monitor: para el brillo (b) y el contraste (c), una curva de puntos [nivel de Kast, valor real
- * del monitor en % de su escala]. Se ajustan tres niveles (0, 50 y 100 %) comparando con los demás monitores. */
-const CAL_LEVELS = [0, 50, 100], IDENT = [[0, 0], [100, 100]];
+ * del monitor en % de su escala]. Se ajustan hasta cinco niveles comparando con los demás monitores: los extremos
+ * siempre, y los intermedios sólo si hace falta (los que no se tocan siguen la recta entre sus vecinos). */
+const CAL_LEVELS = [0, 25, 50, 75, 100], IDENT = [[0, 0], [100, 100]];
 function parseCurve(v) {
   const t = v.trim().split(/\s+/);
   const p = v.includes(':') ? t.map(x => x.split(':').map(Number)) : t.length === 2 ? [[0, +t[0]], [100, +t[1]]] : [];
@@ -691,56 +695,78 @@ async function calibrate(m) {
   // Con qué monitores se compara: los demás que permiten cambiar ese ajuste.
   const others = { b: ddc, c: ddc.filter(x => x.c !== null) };
   for (const t in others) others[t] = others[t].filter(x => x.i !== m.i).map(x => x.i).join(',');
-  const pts = { b: CAL_LEVELS.map(k => curveAt(cal[m.name]?.b, k)), c: CAL_LEVELS.map(k => curveAt(cal[m.name]?.c, k)) };
+  // Por ajuste: valor real en cada nivel (p) y qué niveles están fijados (a); los extremos siempre lo están.
+  const last = CAL_LEVELS.length - 1;
+  const load = cv => ({ p: CAL_LEVELS.map(k => curveAt(cv, k)), a: CAL_LEVELS.map((k, i) => !i || i === last || !!cv?.some(([ck]) => ck === k)) });
+  const st = { b: load(cal[m.name]?.b), c: load(cal[m.name]?.c) };
   const NAME = { b: 'brillo', c: 'contraste' };
   let tab = 'b';
+  // Los niveles sin fijar siguen la recta entre los fijados más cercanos.
+  const relax = s => {
+    for (let i = 1; i < last; i++) if (!s.a[i]) {
+      let lo = i - 1, hi = i + 1;
+      while (!s.a[lo]) lo--;
+      while (!s.a[hi]) hi++;
+      s.p[i] = Math.round(s.p[lo] + (CAL_LEVELS[i] - CAL_LEVELS[lo]) * (s.p[hi] - s.p[lo]) / (CAL_LEVELS[hi] - CAL_LEVELS[lo]));
+    }
+  };
   const ok = await modal({
     title: `Calibrar · ${m.name}`, ok: 'Guardar',
-    body: `<p class="sub">Elige qué valor real de este monitor corresponde a cada nivel de Kast, para que con el mismo porcentaje todos los monitores se vean igual.${others.b ? ' Al mover un control, este monitor muestra ese valor y los demás se ponen en ese nivel para que los compares.' : ''}</p>
+    body: `<p class="sub">Elige qué valor real de este monitor corresponde a cada nivel de Kast, para que con el mismo porcentaje todos los monitores se vean igual.${others.b ? ' Al mover un control, este monitor muestra ese valor y los demás se ponen en ese nivel para que los compares.' : ''} Ajusta los extremos y sólo los niveles intermedios que no coincidan; con − y + vas de un valor real al siguiente.</p>
       <div class="seg" id="ctab"><button data-t="b" class="on">${icon('sun')}Brillo</button><button data-t="c"${m.c === null ? ' disabled title="Este monitor no permite cambiar el contraste"' : ''}>${icon('contrast')}Contraste</button></div>
       <div id="crows"></div>
       <div class="btns"><span class="sub" id="chint"></span><div class="grow"></div><button class="btn ghost" id="creset">Restablecer</button></div>
       <div class="warn" id="cerr"></div>`,
     onOpen: d => {
       const rows = $('#crows', d);
-      const preview = i => run(`${others[tab] ? `${tab} ${others[tab]} ${CAL_LEVELS[i]}; ` : ''}${tab}raw ${m.i} ${pts[tab][i]}`, { key: 'cal', quiet: true });
+      const preview = i => run(`${others[tab] ? `${tab} ${others[tab]} ${CAL_LEVELS[i]}; ` : ''}${tab}raw ${m.i} ${st[tab].p[i]}`, { key: 'cal', quiet: true });
+      const show = () => $$('.cal-row', rows).forEach((row, j) => {
+        const s = st[tab], r = $('input', row);
+        r.value = s.p[j]; fill(r); $('output', row).textContent = s.p[j];
+        row.classList.toggle('auto', !s.a[j]);
+        row.title = s.a[j] ? '' : 'Sigue la recta entre los niveles ajustados';
+      });
+      const set = (i, v) => {
+        const s = st[tab];
+        v = Math.max(0, Math.min(100, v));
+        s.a[i] = true;
+        s.p[i] = v;
+        // La curva no puede bajar: los niveles fijados a cada lado se ajustan.
+        for (let j = 0; j < i; j++) if (s.a[j]) s.p[j] = Math.min(s.p[j], v);
+        for (let j = i + 1; j <= last; j++) if (s.a[j]) s.p[j] = Math.max(s.p[j], v);
+        relax(s);
+        show();
+        preview(i);
+      };
       const draw = () => {
-        rows.innerHTML = CAL_LEVELS.map((k, i) => `<div class="cal-row"><span>Kast al ${k} %</span><input type="range" min="0" max="100" data-p="${i}" value="${pts[tab][i]}" aria-label="Valor real del monitor para el ${k} % de Kast"><output>${pts[tab][i]}</output></div>`).join('');
+        rows.innerHTML = CAL_LEVELS.map((k, i) => `<div class="cal-row fine"><span>Kast al ${k} %</span>
+          <button class="btn ghost icon" data-d="-1" title="Un valor menos">−</button>
+          <input type="range" min="0" max="100" value="0" aria-label="Valor real del monitor para el ${k} % de Kast">
+          <button class="btn ghost icon" data-d="1" title="Un valor más">+</button><output></output></div>`).join('');
         $('#chint', d).textContent = `Valores en % de la escala de ${NAME[tab]} del monitor`;
-        $$('input', rows).forEach(r => {
-          fill(r);
-          const i = +r.dataset.p;
+        $$('.cal-row', rows).forEach((row, i) => {
+          const r = $('input', row);
           r.onfocus = () => preview(i);
-          r.oninput = () => {
-            const p = pts[tab], v = +r.value;
-            // Mientras el 50 % siga en la recta entre los extremos (no se ha tocado), los acompaña.
-            const follow = i !== 1 && p[1] === Math.round((p[0] + p[2]) / 2);
-            p[i] = v;
-            // La curva no puede bajar: los niveles vecinos se ajustan.
-            for (let j = 0; j < i; j++) p[j] = Math.min(p[j], v);
-            for (let j = i + 1; j < p.length; j++) p[j] = Math.max(p[j], v);
-            if (follow) p[1] = Math.round((p[0] + p[2]) / 2);
-            $$('input', rows).forEach((x, j) => { x.value = p[j]; x.nextElementSibling.textContent = p[j]; fill(x); });
-            preview(i);
-          };
+          r.oninput = () => set(i, +r.value);
+          $$('[data-d]', row).forEach(b => b.onclick = () => set(i, st[tab].p[i] + +b.dataset.d));
         });
+        show();
       };
       $$('#ctab button', d).forEach(b => b.onclick = () => { tab = b.dataset.t; $$('#ctab button', d).forEach(x => x.classList.toggle('on', x === b)); draw(); });
-      $('#creset', d).onclick = () => { pts[tab] = [...CAL_LEVELS]; draw(); };
+      $('#creset', d).onclick = () => { st[tab] = load(null); draw(); };
       draw();
     },
     validate: d => {
-      const bad = ['b', 'c'].find(t => pts[t][2] - pts[t][0] < 5);
+      const bad = ['b', 'c'].find(t => st[t].p[last] - st[t].p[0] < 5);
       if (bad) $('#cerr', d).textContent = `En el ${NAME[bad]}, el 100 % debe quedar al menos 5 puntos por encima del 0 %`;
       return !bad;
     },
   });
   for (const [i, braw, craw] of before) run(`braw ${i} ${braw}${craw === null ? '' : `; craw ${i} ${craw}`}`, { quiet: true });
   if (!ok) return;
-  // Sin cambios no se guarda nada; si el punto medio cae en medio, basta con los dos extremos.
-  const curve = p => p.every((v, i) => v === CAL_LEVELS[i]) ? null
-    : p[1] === Math.round((p[0] + p[2]) / 2) ? [[0, p[0]], [100, p[2]]] : CAL_LEVELS.map((k, i) => [k, p[i]]);
-  const e = Object.fromEntries(['b', 'c'].map(t => [t, curve(pts[t])]).filter(([, v]) => v));
+  // Se guardan sólo los niveles fijados; si la curva queda como la escala del monitor, no se guarda nada.
+  const curve = s => { const c = CAL_LEVELS.map((k, i) => [k, s.p[i]]).filter((_, i) => s.a[i]); return c.every(([k, r]) => k === r) ? null : c; };
+  const e = Object.fromEntries(['b', 'c'].map(t => [t, curve(st[t])]).filter(([, v]) => v));
   if (Object.keys(e).length) cal[m.name] = e; else delete cal[m.name];
   changed();
   sig = ''; renderMons();

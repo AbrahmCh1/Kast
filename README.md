@@ -100,9 +100,10 @@ VY279HGR = 0:30 100:75
 
 ### Calibrar monitores
 
-Cada monitor tiene su propia escala: en uno el 100 % de brillo puede verse como el 75 % de otro. Con **Calibrar**, en la tarjeta de cada monitor, eliges qué valor real del monitor corresponde al 0 %, al 50 % y al 100 % de Kast, por separado para el brillo y el contraste. Al mover cada control, ese monitor muestra el valor y los demás se ponen en ese mismo nivel de Kast para compararlos. **Guardar** lo escribe en `kast.ini`, y desde entonces `b`, `c`, los favoritos, los atajos y la interfaz usan esa escala.
+Cada monitor tiene su propia escala: en uno el 100 % de brillo puede verse como el 75 % de otro. Con **Calibrar**, en la tarjeta de cada monitor, eliges qué valor real del monitor corresponde a cada nivel de Kast (0, 25, 50, 75 y 100 %), por separado para el brillo y el contraste. Al mover cada control, ese monitor muestra el valor y los demás se ponen en ese mismo nivel de Kast para compararlos. **Guardar** lo escribe en `kast.ini`, y desde entonces `b`, `c`, los favoritos, los atajos y la interfaz usan esa escala.
 
-- Entre los puntos, la escala es lineal. Mientras no toques el 50 %, sigue la recta entre los extremos.
+- Ajusta los extremos y sólo los niveles intermedios que no coincidan. Los que no toques siguen la recta entre los ajustados, y sólo se guardan los ajustados.
+- Con **−** y **+** vas de un valor real del monitor al siguiente. Sirve para monitores que cambian mucho en pocos valores, como uno cuyo contraste varía casi todo entre 0 y 10.
 - Para ver o fijar el valor real sin calibración: `kast braw` y `kast craw`.
 - El formato anterior, `monitor = mínimo máximo` (solo el 0 % y el 100 % del brillo), se sigue leyendo.
 
