@@ -41,6 +41,15 @@ final class VideoView: UIView, VideoSink {
         renderer.enqueue(sample)
     }
 
+    /// Otra sesión (cambio de pantalla): se olvida la imagen y el formato anteriores.
+    func reset() {
+        renderer.flush()
+        format = nil
+        sps = Data(); pps = Data()
+        gotIDR = false
+        lastRequest = .distantPast
+    }
+
     /// Pide un fotograma clave (como mucho uno por segundo).
     func askKeyframe() {
         guard Date().timeIntervalSince(lastRequest) > 1 else { return }

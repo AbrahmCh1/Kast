@@ -31,6 +31,9 @@ struct Session: Equatable {
     var height = 0
     var error = ""
     var note = ""
+    /// Pantalla del otro equipo que se ve y cuántas tiene (para cambiar de una a otra).
+    var monitor = 1
+    var displays: [[Int]] = []
 }
 
 /// Cómo se entra en el otro equipo.
@@ -66,7 +69,13 @@ final class LinkClient: ObservableObject {
     static let shared = LinkClient()
 
     @Published var devices: [Device] = []
-    @Published var session: Session?
+    @Published var session: Session? {
+        didSet { sidLock.lock(); currentSid = session?.id ?? 0; sidLock.unlock() }
+    }
+    /// Sesión a la que pertenecen los fotogramas que se muestran (al cambiar de pantalla, los de la anterior se descartan).
+    private let sidLock = NSLock()
+    private var currentSid: UInt64 = 0
+    private func isCurrent(_ sid: UInt64) -> Bool { sidLock.lock(); defer { sidLock.unlock() }; return sid == currentSid }
     @Published var toast: String?
     /// El equipo pidió contraseña o código.
     @Published var authRequest: AuthRequest?
@@ -100,6 +109,7 @@ final class LinkClient: ObservableObject {
             let frame = Data(bytes: avcc, count: len)
             let s = (sps != nil && spsLen > 0) ? Data(bytes: sps!, count: spsLen) : nil
             let p = (pps != nil && ppsLen > 0) ? Data(bytes: pps!, count: ppsLen) : nil
+            guard me.isCurrent(session) else { return }
             me.sink?.enqueue(avcc: frame, sps: s, pps: p)
         })
         // Pruebas: conectar solo (KAST_AUTOCONNECT=id o ip:dirección:puerto).
@@ -116,6 +126,10 @@ final class LinkClient: ObservableObject {
 
     /// Pruebas (KAST_AUTOTEST): una secuencia de entrada fija al empezar la sesión.
     private func autotest() {
+        // KAST_AUTOSWITCH=n: a los 3 s cambia a la pantalla n (prueba del cambio de pantalla sin volver a preguntar).
+        if let n = ProcessInfo.processInfo.environment["KAST_AUTOSWITCH"].flatMap(Int.init), session?.monitor != n {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.switchScreen(to: n) }
+        }
         guard ProcessInfo.processInfo.environment["KAST_AUTOTEST"] != nil else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             self.move(100, 80)
@@ -145,6 +159,7 @@ final class LinkClient: ObservableObject {
             if let c = v["control"] as? Bool { s.control = c }
             if let w = v["w"] as? Int { s.width = w }
             if let h = v["h"] as? Int { s.height = h }
+            if let ds = v["displays"] as? [[Int]], !ds.isEmpty { s.displays = ds }
             if let e = v["error"] as? String { s.error = e }
             if let n = v["note"] as? String, !n.isEmpty { s.note = n; toast = "\(s.peer): \(n)" }
             if s.state == "ended", !s.error.isEmpty { toast = s.error }
@@ -185,7 +200,15 @@ final class LinkClient: ObservableObject {
         let id = mode == .approval
             ? kl_connect(d.id, UInt32(monitor), control)
             : kl_connect_auth(d.id, UInt32(monitor), control, mode.rawValue, secret)
-        session = Session(id: id, peer: d.name, platform: d.platform)
+        session = Session(id: id, peer: d.name, platform: d.platform, monitor: monitor, displays: d.displays)
+    }
+
+    /// Cambia a otra pantalla del mismo equipo: abre la nueva antes de cerrar la anterior, así el otro equipo no
+    /// vuelve a preguntar (la petición incluye todas sus pantallas; ver link/src/agent.rs, Grant).
+    func switchScreen(to monitor: Int) {
+        guard let old = session, old.monitor != monitor, let (d, _, control, _) = lastConnect else { return }
+        connect(d, monitor: monitor, control: control)
+        command(["cmd": "disconnect", "session": old.id])
     }
 
     func disconnect() {

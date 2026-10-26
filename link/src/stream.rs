@@ -45,13 +45,16 @@ pub fn open(monitor: usize, fps: u32, mbps: u32, show_cursor: bool) -> Res<platf
     platform::Source::new(monitor, fps, mbps, pattern, show_cursor)
 }
 
-/// Anfitrión: transmite el monitor hasta que se corte la conexión. `keyframe`: el visor pidió un fotograma clave.
-pub fn serve(ch: &mut Secure, mut src: platform::Source, fps: u32, keyframe: &AtomicBool) -> Res<()> {
+/// Anfitrión: transmite el monitor hasta que se corte la conexión. `keyframe`: el visor pidió un fotograma clave;
+/// `closed`: el hilo que recibe del visor vio la conexión cerrada (con la pantalla quieta no se envía nada y,
+/// sin esto, la sesión seguiría abierta hasta el siguiente cambio de imagen).
+pub fn serve(ch: &mut Secure, mut src: platform::Source, fps: u32, keyframe: &AtomicBool, closed: &AtomicBool) -> Res<()> {
     let (w, h) = src.size();
     ch.send_typed(msg::HELLO, &hello_bytes(w, h, fps))?;
     let mut cursor = (i32::MIN, 0, false);
     let mut st = Stats::new();
     loop {
+        if closed.load(Ordering::Relaxed) { return Err("el visor cerró la conexión".into()); }
         if keyframe.swap(false, Ordering::Relaxed) { src.request_keyframe(); }
         match src.next()? {
             Some(f) => {

@@ -22,7 +22,7 @@
 - **CLI completa** (`kast.exe`) para scripts.
 
 **[Kast Link](#kast-link): tus otros equipos**
-- **Ver y controlar** otro equipo Windows o Mac, en una ventana o a pantalla completa en uno de tus monitores, como AnyDesk.
+- **Ver y controlar** otro equipo Windows o Mac, como AnyDesk: una o **varias de sus pantallas a la vez**, cada una en una ventana o a pantalla completa en uno de tus monitores.
 - **Portapapeles compartido** (texto e imágenes), **archivos arrastrando** a la ventana y **atajos del sistema** (`Win`, `Alt+Tab`…) hacia el otro equipo.
 - **Acceso:** ID de 9 dígitos por equipo, emparejamiento con código de un solo uso, acceso desatendido con contraseña y lista de dispositivos con acceso.
 - **[App para iPhone y iPad](#ios-iphone-y-ipad)** con modo trackpad, modo táctil y teclado completo.
@@ -144,9 +144,9 @@ Ver y **controlar** otro equipo (como AnyDesk) en uno de tus monitores, por la r
 Todo se hace desde Kast → **Dispositivos**.
 
 1. Abre Kast en los dos equipos. Se encuentran solos en la red local; si no, usa **Agregar dispositivo** con la IP del otro, o **Conectar por ID** con su ID de 9 dígitos.
-2. En el que va a ver: elige el dispositivo, **qué pantalla suya** ver y **dónde mostrarla** (una ventana o a pantalla completa en uno de tus monitores) y pulsa **Conectar**. Con **Controlar teclado y ratón** (activado por defecto) puedes escribir, hacer clic, arrastrar y desplazarte en el otro equipo.
+2. En el que va a ver: en la tarjeta del dispositivo marca **qué pantallas suyas** quieres (una o varias a la vez) y **dónde mostrar cada una** (en una ventana o a pantalla completa en uno de tus monitores), y pulsa **Conectar**. Con **Controlar teclado y ratón** (activado por defecto) puedes escribir, hacer clic, arrastrar y desplazarte en el otro equipo; cada pantalla se controla desde su propia ventana.
 3. El otro equipo te deja entrar de una de estas formas:
-   - **Aceptando la petición:** muestra un **código de 6 dígitos** que debe coincidir con el tuyo, y permite el control o sólo la vista. Con **Recordar este dispositivo** no vuelve a preguntar.
+   - **Aceptando la petición:** muestra un **código de 6 dígitos** que debe coincidir con el tuyo, y permite el control o sólo la vista. Si pides varias pantallas, una sola aprobación las cubre todas. Con **Recordar este dispositivo** no vuelve a preguntar.
    - **Emparejados:** si os emparejasteis con un código, entras sin preguntar.
    - **Con su contraseña de acceso desatendido:** pulsa **Contraseña o código** en la tarjeta del dispositivo.
 
@@ -172,6 +172,8 @@ En Dispositivos → **Acceso a este equipo**:
 - **Emparejar un dispositivo:** genera un código de un solo uso (por ejemplo `K7QM-4ZP2`, válido 10 minutos) con el permiso que elijas: ver, o ver y controlar. En el otro dispositivo: **Contraseña o código** → Código. Desde entonces entra sin preguntar.
 - **Acceso desatendido:** una contraseña (mínimo 8 caracteres) para entrar sin que nadie acepte, con su permiso. Al cambiarla o desactivarla se cortan las sesiones que entraron con ella, y mientras alguien está conectado con ella se avisa en este equipo.
 - **Dispositivos con acceso:** los emparejados y recordados, con su permiso y su último acceso. **Quitar acceso** los obliga a volver a pedir permiso y corta su sesión.
+
+**Varias pantallas:** al aceptar (o al entrar con contraseña o código), el equipo concede las pantallas pedidas a ese grupo de conexiones: las demás se abren, o se cambia de una a otra en iOS, sin volver a preguntar mientras alguna siga abierta. Al cerrarlas todas, volver a entrar pide permiso como siempre.
 
 La contraseña y el código **nunca se envían**: el equipo manda una sal y el otro responde con una prueba (Argon2id + BLAKE2s-MAC) ligada a esa conexión concreta, que no sirve en ninguna otra. La contraseña se guarda sólo derivada con Argon2id. Tras 5 intentos fallidos en 10 minutos, ese dispositivo queda bloqueado 5 minutos; cada fallo se avisa y se registra.
 
@@ -213,7 +215,7 @@ Para que no haya que aceptar nada al aplicarla, empareja el dispositivo o marca 
 - **Todo nativo:** las APIs de captura, vídeo y entrada que ya trae cada sistema, sin códecs ni librerías externas.
 - **Hoja de ruta:** conectarse desde fuera de casa (servidor de encuentro y relé, y después conexión directa), cruce transparente del ratón entre monitores de distintos equipos, atajos del sistema también desde un visor en Mac (`Cmd+Tab`…), recibir archivos del otro equipo, pantallas virtuales (equipos sin monitor) y varias pantallas a la vez.
 
-Pruebas: `cargo test --manifest-path link/Cargo.toml` y `python3 link/tests/e2e.py <kast-link>` (dos agentes en el mismo equipo: descubrimiento, aprobación, control, disposiciones, archivos, cliente de iOS, contraseña, emparejamiento y límite de intentos).
+Pruebas: `cargo test --manifest-path link/Cargo.toml` y `python3 link/tests/e2e.py <kast-link>` (dos agentes en el mismo equipo: descubrimiento, aprobación, control, disposiciones, archivos, cliente de iOS, contraseña, emparejamiento, límite de intentos y varias pantallas).
 
 # iOS (iPhone y iPad)
 
@@ -229,6 +231,7 @@ App para **ver y controlar tus equipos** con Kast desde el iPhone o el iPad, por
 - **Modo táctil:** tocas donde quieres hacer clic; mantener = clic derecho.
 - **En vertical:** la pantalla remota arriba y debajo un panel de trackpad con botones de **clic izquierdo y derecho** (se pueden mantener pulsados para arrastrar). Con el teclado abierto, el panel se encoge.
 - **Zoom:** pellizca para acercarte; la vista sigue al cursor.
+- **Cambiar de pantalla:** si el equipo tiene varias, el botón de pantallas de la barra pasa de una a otra sin que vuelva a preguntar.
 - **Teclado:**
   - el de iOS escribe tal cual (acentos, ñ, emojis);
   - la barra de encima añade Esc, Tab, flechas, Supr, Inicio/Fin, RePág/AvPág, F1-F12, los modificadores Ctrl, Alt/⌥, Win/⌘ y ⇧ (se fijan con un toque) y un menú de atajos del sistema remoto;
@@ -246,6 +249,8 @@ Usa el núcleo de Kast Link en Rust como biblioteca estática (`link/src/mobile.
 Para el simulador: `bash ios/build.sh sim`.
 
 ## Estructura
+
+Por lenguajes: **Rust** (Kast Link: protocolo, cifrado, vídeo y entrada, compartido con la app de iOS), **Swift** (apps de macOS e iOS), **C** (Windows: monitores, bandeja y ventana) y HTML/JavaScript (la interfaz compartida).
 
 ```
 src/core.c      Windows: monitores, DDC/CI, comandos y configuración

@@ -28,6 +28,19 @@ class Agent:
             if line.strip():
                 self.q.put(json.loads(line))
 
+    def settled(self, cond, timeout=20):
+        """Espera a que el estado *actual* (no uno antiguo de la cola) cumpla la condición."""
+        end = time.time() + timeout
+        while time.time() < end:
+            while not self.q.empty():
+                self.q.get_nowait()
+            self.send(cmd="state")
+            m = self.wait(lambda m: m.get("ev") == "state")
+            if cond(m):
+                return m
+            time.sleep(0.2)
+        raise SystemExit(f"tiempo agotado esperando el estado en {self.name}")
+
     def send(self, **cmd):
         self.p.stdin.write(json.dumps(cmd) + "\n")
         self.p.stdin.flush()
@@ -80,8 +93,8 @@ try:
         print(f"   captura en {SHOT}")
 
     A.send(cmd="disconnect", session=sid)
-    A.wait(state(lambda m: not m["sessions"]))
-    B.wait(state(lambda m: not m["sessions"]))
+    A.settled(lambda m: not m["sessions"])
+    B.settled(lambda m: not m["sessions"])
     print("4) desconectada en ambos lados")
 
     A.send(cmd="connect", id=me_b["id"], monitor=1, show_on=0)
@@ -96,8 +109,8 @@ try:
 
     def hang_up(s):
         A.send(cmd="disconnect", session=s["session"])
-        A.wait(state(lambda m: not m["sessions"]))
-        B.wait(state(lambda m: not m["sessions"]))
+        A.settled(lambda m: not m["sessions"])
+        B.settled(lambda m: not m["sessions"])
 
     # B recuerda a A sólo para ver: después ve sin preguntar, pero si pide control vuelve a preguntar.
     A.send(cmd="connect", id=me_b["id"], monitor=1, show_on=0, control=False)
@@ -241,6 +254,28 @@ try:
     print("13) límite de intentos: tras 5 contraseñas incorrectas, bloqueado aunque acierte")
     B.send(cmd="access_set", unknown="ask", unattended=False)
     B.wait(state(lambda m: not m["access"]["unattended"] and m["access"]["unknown"] == "ask"))
+
+    # Varias pantallas con una sola aprobación (si B tiene más de una) y, después, otra conexión del mismo grupo
+    # entra sin volver a preguntar.
+    B.send(cmd="revoke", key=ka)
+    B.wait(state(lambda m: not any(is_a(t) for t in m["trusted"])))
+    screens = [{"monitor": i + 1, "show_on": 9} for i in range(min(2, len(me_b["displays"])))]
+    A.send(cmd="connect", id=me_b["id"], control=False, screens=screens)
+    req6 = B.wait(lambda m: m.get("ev") == "request")
+    assert req6["monitors"] == [s["monitor"] for s in screens], req6
+    B.send(cmd="answer", req=req6["req"], accept=True, remember=False, control=False)
+    st = A.wait(state(lambda m: sum(1 for x in m["sessions"] if x["dir"] == "in" and x["state"] == "live") == len(screens)), 30)
+    assert not B.settled(lambda m: True)["requests"], "pidió permiso otra vez"
+    for x in st["sessions"]:
+        A.send(cmd="disconnect", session=x["session"])
+    A.settled(lambda m: not m["sessions"])
+    B.settled(lambda m: not m["sessions"])
+    # Cerradas todas, el permiso del grupo se acaba: volver a entrar pide permiso otra vez.
+    A.send(cmd="connect", id=me_b["id"], monitor=1, show_on=9, control=False)
+    req7 = B.wait(lambda m: m.get("ev") == "request")
+    B.send(cmd="answer", req=req7["req"], accept=False)
+    A.wait(lambda m: m.get("ev") == "toast" and m.get("err"))
+    print(f"14) pantallas {[s['monitor'] for s in screens]} con una sola aprobación; al cerrarlas, volver a entrar pide permiso")
     print("OK")
 finally:
     for a in (A, B):

@@ -53,6 +53,8 @@ struct Client {
     devices: Mutex<HashMap<String, Dev>>,
     saved: Mutex<Vec<Saved>>,
     sessions: Mutex<HashMap<u64, Sess>>,
+    /// Grupo de conexiones por dispositivo: cambiar de pantalla no vuelve a pedir permiso (ver agent.rs, Grant).
+    groups: Mutex<HashMap<String, String>>,
     next: AtomicU64,
     udp: UdpSocket,
     ctx: Ctx,
@@ -218,8 +220,12 @@ impl Client {
             sess.sock = Some(ch.shutdown_handle()?);
         }
         self.session_ev(session, "waiting", json!({"peer": name, "code": ch.code}));
-        let req = json!({"name": self.name, "platform": "ios", "monitor": monitor, "control": control,
-                         "auth": auth.map(|(k, _)| k.as_str())}).to_string();
+        // Se piden todas sus pantallas: así se puede cambiar de una a otra sin que el equipo vuelva a preguntar.
+        let group = self.groups.lock().unwrap().entry(id.to_string())
+            .or_insert_with(|| { let mut b = [0u8; 12]; let _ = getrandom::fill(&mut b); crate::net::hex(&b) }).clone();
+        let count = self.devices.lock().unwrap().get(id).map(|d| d.displays.len()).unwrap_or(0).max(monitor);
+        let req = json!({"name": self.name, "platform": "ios", "monitor": monitor, "monitors": (1..=count).collect::<Vec<_>>(),
+                         "all_monitors": true, "group": group, "control": control, "auth": auth.map(|(k, _)| k.as_str())}).to_string();
         ch.send_typed(msg::REQUEST, req.as_bytes())?;
         let mut m = Vec::new();
         loop {
@@ -261,7 +267,8 @@ impl Client {
         let rd = |i: usize| b.get(i..i + 4).map(|x| u32::from_be_bytes(x.try_into().unwrap())).unwrap_or(0);
         let (w, h) = (rd(0), rd(4));
         if control_tx(self, session, &ch, got_control).is_err() { return Ok(()); }
-        self.session_ev(session, "live", json!({"peer": name, "control": got_control, "w": w, "h": h, "note": note}));
+        let displays = granted.get("displays").cloned().unwrap_or(json!([]));
+        self.session_ev(session, "live", json!({"peer": name, "control": got_control, "w": w, "h": h, "note": note, "displays": displays}));
         self.receive(session, &mut ch)
     }
 
@@ -389,7 +396,7 @@ pub unsafe extern "C" fn kl_start(dir: *const c_char, name: *const c_char, ctx: 
     let _ = udp.set_broadcast(true);
     let c = Arc::new(Client {
         me: store::identity(), name, devices: Mutex::new(HashMap::new()), saved: Mutex::new(store::load_devices()),
-        sessions: Mutex::new(HashMap::new()), next: AtomicU64::new(0), udp, ctx: Ctx(ctx), ev, frame,
+        sessions: Mutex::new(HashMap::new()), groups: Mutex::new(HashMap::new()), next: AtomicU64::new(0), udp, ctx: Ctx(ctx), ev, frame,
     });
     let _ = CLIENT.set(c.clone());
     { let c = c.clone(); std::thread::spawn(move || c.receive_loop()); }

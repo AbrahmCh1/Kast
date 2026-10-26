@@ -100,10 +100,18 @@ extern "C" fn probe_event(_: *mut std::ffi::c_void, json: *const std::ffi::c_cha
     }
 }
 
-extern "C" fn probe_frame(_: *mut std::ffi::c_void, _: u64, _: *const u8, len: usize, _: *const u8, sps: usize, _: *const u8, pps: usize) {
+extern "C" fn probe_frame(_: *mut std::ffi::c_void, _: u64, avcc: *const u8, len: usize, _: *const u8, _: usize, _: *const u8, _: usize) {
     use std::sync::atomic::Ordering;
-    if len > 0 { FRAMES.fetch_add(1, Ordering::Relaxed); }
-    if sps > 0 && pps > 0 { KEYFRAMES.fetch_add(1, Ordering::Relaxed); }
+    if len == 0 || avcc.is_null() { return; }
+    FRAMES.fetch_add(1, Ordering::Relaxed);
+    // Fotograma clave: lleva un corte IDR (NAL 5). SPS/PPS no siempre se repiten en los forzados.
+    let d = unsafe { std::slice::from_raw_parts(avcc, len) };
+    let mut i = 0;
+    while i + 4 < d.len() {
+        let n = u32::from_be_bytes(d[i..i + 4].try_into().unwrap()) as usize;
+        if d[i + 4] & 0x1F == 5 { KEYFRAMES.fetch_add(1, Ordering::Relaxed); break; }
+        i += 4 + n;
+    }
 }
 
 /// Se conecta como la app de iOS (mobile.rs) y cuenta los fotogramas recibidos.
@@ -133,7 +141,7 @@ fn probe(o: &Opts) -> Res<()> {
             return Err(if e.is_empty() { "la sesión terminó".into() } else { e.into() });
         }
         // Pide fotogramas clave como la app (con la pantalla quieta, macOS no manda otros por su cuenta).
-        if FRAMES.load(Ordering::Relaxed) > 0 && t0.elapsed() > Duration::from_secs(4 + 4 * asked) && asked < 2 {
+        if t0.elapsed() > Duration::from_secs(4 + 4 * asked) && asked < 2 {
             mobile::kl_keyframe(session);
             asked += 1;
         }
@@ -147,7 +155,7 @@ fn probe(o: &Opts) -> Res<()> {
         }
     }
     let (n, k) = (FRAMES.load(Ordering::Relaxed), KEYFRAMES.load(Ordering::Relaxed));
-    println!("probe: {n} fotogramas ({k} con SPS/PPS)");
+    println!("probe: {n} fotogramas ({k} clave)");
     if n == 0 || k == 0 { return Err("no llegó vídeo utilizable".into()); }
     if k < 2 { return Err("no llegaron los fotogramas clave pedidos".into()); }
     Ok(())

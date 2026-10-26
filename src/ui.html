@@ -144,6 +144,11 @@ h2 { margin: 26px 0 10px; font-size: 14px; font-weight: 600; }
 .slider-row { display: grid; grid-template-columns: 18px 76px 1fr 38px; align-items: center; gap: 8px; }
 .slider-row output { text-align: right; font-variant-numeric: tabular-nums; color: var(--sub); }
 .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.screens { display: flex; flex-direction: column; gap: 6px; }
+.screens .head { font-size: 12.5px; color: var(--sub); display: flex; justify-content: space-between; }
+.screens .srow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: center; font-size: 13px; }
+.screens .srow label { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.screens .srow select:disabled { opacity: .45; }
 .cal-row { display: grid; grid-template-columns: 110px 1fr 38px; align-items: center; gap: 10px; }
 .cal-row output { text-align: right; color: var(--sub); font-variant-numeric: tabular-nums; }
 .field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--sub); min-width: 0; }
@@ -976,12 +981,19 @@ let reqShown = null;          // petición cuyo diálogo está abierto
 const linkCmd = o => post('link\n' + JSON.stringify(o));
 const platIcon = p => icon(p === 'mac' ? 'apple' : p === 'windows' ? 'win' : p === 'ios' ? 'phone' : 'devices');
 const platName = p => p === 'mac' ? 'Mac' : p === 'windows' ? 'Windows' : p === 'ios' ? 'iPhone/iPad' : '';
+/** «tu pantalla 1» / «tus pantallas 1 y 2» / «todas tus pantallas». */
+const screensText = r => {
+  const ms = r.monitors?.length ? r.monitors : [r.monitor];
+  if (ms.length === 1) return `tu pantalla ${ms[0]}`;
+  if (L?.me?.displays && ms.length >= L.me.displays.length) return 'todas tus pantallas';
+  return `tus pantallas ${ms.slice(0, -1).join(', ')} y ${ms[ms.length - 1]}`;
+};
 
 function onLink(m) {
   if (m.ev === 'missing') { $('#linkMissing').hidden = false; $('#meSub').textContent = 'No disponible'; return; }
   if (m.ev === 'toast') return toast(m.msg, m.err);
   if (m.ev === 'request' || m.ev === 'show') { showTab('dispositivos'); return; }
-  if (m.ev === 'need_auth') { authDialog({ id: m.id, name: m.name, monitor: m.monitor, show: m.show_on, control: m.control }, m.failed); return; }
+  if (m.ev === 'need_auth') { authDialog({ id: m.id, name: m.name, screens: m.screens || [{ monitor: m.monitor, show_on: m.show_on }], control: m.control }, m.failed); return; }
   if (m.ev !== 'state') return;
   L = m;
   $('#linkMissing').hidden = true;
@@ -996,7 +1008,7 @@ async function askRequest(r) {
   showTab('dispositivos');
   const res = await modal({
     title: 'Petición de conexión', ok: 'Aceptar', cancel: 'Rechazar',
-    body: `<p><b>${esc(r.name)}</b>${r.platform ? ` (${platName(r.platform)})` : ''} quiere ${r.control ? 'ver y <b>controlar</b>' : 'ver'} tu <b>pantalla ${r.monitor}</b>.</p>
+    body: `<p><b>${esc(r.name)}</b>${r.platform ? ` (${platName(r.platform)})` : ''} quiere ${r.control ? 'ver y <b>controlar</b>' : 'ver'} <b>${screensText(r)}</b>.</p>
       <p class="sub">Comprueba que en su pantalla aparece este código:</p><div class="code">${esc(r.code)}</div>
       <div class="checks" style="flex-direction:column;gap:8px">${r.control ? '<label><input type="checkbox" id="reqControl" checked>Permitir que controle el teclado y el ratón</label>' : ''}
         <label><input type="checkbox" id="reqRemember">Recordar este dispositivo (no volver a preguntar)</label></div>`,
@@ -1022,7 +1034,7 @@ function renderLink() {
   $('#linkRequests').innerHTML = '';
   for (const r of L.requests) {
     const c = el(`<div class="card row req" style="margin-bottom:12px"><div class="ic dev-ic">${platIcon(r.platform)}</div>
-      <div class="body"><div style="font-weight:600">${esc(r.name)} quiere ${r.control ? 'ver y controlar' : 'ver'} tu pantalla ${r.monitor}</div>
+      <div class="body"><div style="font-weight:600">${esc(r.name)} quiere ${r.control ? 'ver y controlar' : 'ver'} ${screensText(r)}</div>
       <div class="sub">Código de verificación <span class="code sm">${esc(r.code)}</span></div></div>
       <button class="btn" data-a="no">Rechazar</button><button class="btn primary" data-a="yes">Aceptar</button></div>`);
     $('[data-a=no]', c).onclick = () => { if (reqShown === r.req) { reqShown = null; modalDismiss?.(); } linkCmd({ cmd: 'answer', req: r.req, accept: false }); };
@@ -1057,22 +1069,24 @@ function renderLink() {
   }
   const locals = (S?.mons || []).map(m => `<option value="${m.i}">Pantalla completa en mi monitor ${m.i} · ${esc(m.name)}</option>`).join('');
   for (const d of L.devices) {
-    const sel = linkSel[d.id] || (linkSel[d.id] = { monitor: 1, show: 0, control: true });
+    // Pantallas suyas elegidas: monitor -> dónde mostrarla (0 = una ventana, n = mi monitor n).
+    const sel = linkSel[d.id] || (linkSel[d.id] = { screens: { 1: 0 }, control: true });
     const waiting = L.sessions.find(s => s.dir === 'in' && s.peer === d.name && s.state !== 'live');
     const tags = [platName(d.platform), d.trusted ? 'Puede verme' : '', d.known ? 'Conocido' : '', d.manual ? 'Por IP' : ''].filter(Boolean)
       .map(t => `<span class="tag">${t}</span>`).join(' ');
-    const disp = d.displays.length
-      ? d.displays.map((x, i) => `<option value="${i + 1}"${sel.monitor === i + 1 ? ' selected' : ''}>Pantalla ${i + 1} · ${x[0]} × ${x[1]}</option>`).join('')
-      : '<option value="1">Pantalla 1</option>';
+    const scr = d.displays.length ? d.displays : [null];
+    const rows = scr.map((x, i) => `<div class="srow">
+        <label title="Ver la pantalla ${i + 1}"><input type="checkbox" data-scr="${i + 1}"${(i + 1) in sel.screens ? ' checked' : ''}>Pantalla ${i + 1}${x ? ` · ${x[0]} × ${x[1]}` : ''}</label>
+        <select data-show="${i + 1}"${(i + 1) in sel.screens ? '' : ' disabled'}><option value="0">En una ventana</option>${locals}</select></div>`).join('');
     const c = el(`<div class="card dev${d.online ? '' : ' off'}">
       <div class="dev-h"><div class="dev-ic">${platIcon(d.platform)}</div>
         <div class="t"><div class="title">${esc(d.name)}</div><div class="sub">${[d.short_id ? 'ID ' + d.short_id : '', d.addr || ''].filter(Boolean).map(esc).join(' · ')}</div></div>
         <span class="status${d.online ? ' on' : ''}">${d.online ? 'En línea' : 'Sin conexión'}</span></div>
       <div>${tags}</div>
       ${d.online && !d.sharing ? '<div class="note">No permite que otros vean sus pantallas.</div>' : ''}
-      <div class="fields">
-        <label class="field">Ver su<select data-k="monitor">${disp}</select></label>
-        <label class="field">Mostrar en<select data-k="show"><option value="0">Una ventana</option>${locals}</select></label>
+      <div class="screens">
+        <div class="head"><span>${scr.length > 1 ? 'Sus pantallas (puedes ver varias a la vez)' : 'Su pantalla'}</span><span>Mostrar en</span></div>
+        ${rows}
       </div>
       <div class="checks"><label><input type="checkbox" data-k="control"${sel.control ? ' checked' : ''}>Controlar teclado y ratón</label></div>
       ${waiting ? `<div class="waiting"><div class="spin"></div><div>${waiting.state === 'waiting'
@@ -1081,13 +1095,33 @@ function renderLink() {
         <button class="btn" data-a="auth"${d.online && d.sharing && !waiting ? '' : ' disabled'} title="Conectar con la contraseña de acceso desatendido o con un código de emparejamiento">${icon('key')}Contraseña o código</button>
         <div class="grow"></div><button class="btn ghost" data-a="forget" title="Olvidar este dispositivo">${icon('trash')}</button></div>
     </div>`);
-    const [ms, ss] = $$('select', c);
-    ss.value = String(sel.show);
-    ms.onchange = () => sel.monitor = +ms.value;
-    ss.onchange = () => sel.show = +ss.value;
+    const screensOf = () => Object.entries(sel.screens).map(([m, sh]) => ({ monitor: +m, show_on: +sh })).sort((a, b) => a.monitor - b.monitor);
+    const go = $('[data-a=go]', c), auth = $('[data-a=auth]', c);
+    const refreshGo = () => {
+      const n = Object.keys(sel.screens).length, can = d.online && d.sharing && !waiting && n > 0;
+      go.disabled = auth.disabled = !can;
+      go.lastChild.textContent = n > 1 ? `Conectar (${n} pantallas)` : 'Conectar';
+    };
+    $$('[data-show]', c).forEach(x => {
+      const m = +x.dataset.show;
+      x.value = String(sel.screens[m] ?? 0);
+      x.onchange = () => {
+        // Dos pantallas a pantalla completa en el mismo monitor se taparían: la anterior pasa a ventana.
+        const v = +x.value;
+        if (v) for (const [o, sh] of Object.entries(sel.screens)) if (+o !== m && sh === v) { sel.screens[o] = 0; $(`[data-show="${o}"]`, c).value = '0'; }
+        sel.screens[m] = v;
+      };
+    });
+    $$('[data-scr]', c).forEach(x => x.onchange = () => {
+      const m = +x.dataset.scr, s2 = $(`[data-show="${m}"]`, c);
+      if (x.checked) sel.screens[m] = +s2.value; else delete sel.screens[m];
+      s2.disabled = !x.checked;
+      refreshGo();
+    });
     $('[data-k=control]', c).onchange = e => sel.control = e.target.checked;
-    $('[data-a=go]', c).onclick = () => linkCmd({ cmd: 'connect', id: d.id, monitor: sel.monitor, show_on: sel.show, control: sel.control });
-    $('[data-a=auth]', c).onclick = () => authDialog({ id: d.id, name: d.name, monitor: sel.monitor, show: sel.show, control: sel.control });
+    go.onclick = () => { const sc = screensOf(); linkCmd({ cmd: 'connect', id: d.id, monitor: sc[0].monitor, show_on: sc[0].show_on, screens: sc, control: sel.control }); };
+    auth.onclick = () => authDialog({ id: d.id, name: d.name, screens: screensOf(), control: sel.control });
+    refreshGo();
     $('[data-a=forget]', c).onclick = async () => {
       if (await modal({ title: 'Olvidar dispositivo', body: `<p>¿Olvidar <b>${esc(d.name)}</b>? Si podía ver tus pantallas, tendrá que volver a pedir permiso.</p>`, ok: 'Olvidar', danger: true }))
         linkCmd({ cmd: 'forget', id: d.id });
@@ -1203,7 +1237,8 @@ async function authDialog(t, failed) {
     validate: m => !!$('#akSecret', m).value.trim(),
   });
   if (!m) return;
-  linkCmd({ cmd: 'connect', id: t.id, monitor: t.monitor || 1, show_on: t.show || 0, control: t.control !== false,
+  const sc = t.screens?.length ? t.screens : [{ monitor: 1, show_on: 0 }];
+  linkCmd({ cmd: 'connect', id: t.id, monitor: sc[0].monitor, show_on: sc[0].show_on, screens: sc, control: t.control !== false,
             auth: $('input[name=ak]:checked', m).value, secret: $('#akSecret', m).value });
 }
 

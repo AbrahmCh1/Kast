@@ -27,8 +27,8 @@ fn video_type(subtype: &GUID, w: u32, h: u32, fps: u32) -> Result<IMFMediaType> 
     }
 }
 
-fn set_codec(mft: &IMFTransform, key: &GUID, value: u32, boolean: bool) {
-    let Ok(api) = mft.cast::<ICodecAPI>() else { return };
+fn set_codec(mft: &IMFTransform, key: &GUID, value: u32, boolean: bool) -> windows::core::Result<()> {
+    let api = mft.cast::<ICodecAPI>()?;
     let mut v = VARIANT::default();
     unsafe {
         let inner = &mut *v.Anonymous.Anonymous;
@@ -39,7 +39,7 @@ fn set_codec(mft: &IMFTransform, key: &GUID, value: u32, boolean: bool) {
             inner.vt = VT_UI4;
             inner.Anonymous.ulVal = value;
         }
-        let _ = api.SetValue(key, &v);
+        api.SetValue(key, &v)
     }
 }
 
@@ -48,7 +48,7 @@ fn low_latency(mft: &IMFTransform) {
     if let Ok(a) = unsafe { mft.GetAttributes() } {
         let _ = unsafe { a.SetUINT32(&MF_LOW_LATENCY, 1) };
     }
-    set_codec(mft, &CODECAPI_AVLowLatencyMode, 1, true);
+    let _ = set_codec(mft, &CODECAPI_AVLowLatencyMode, 1, true);
 }
 
 fn new_sample(len: u32) -> Result<IMFSample> {
@@ -107,18 +107,20 @@ impl Encoder {
             mft.SetOutputType(0, &out, 0)?;
             mft.SetInputType(0, &video_type(&MFVideoFormat_NV12, w, h, fps)?, 0)?;
             low_latency(&mft);
-            set_codec(&mft, &CODECAPI_AVEncCommonRateControlMode, eAVEncCommonRateControlMode_CBR.0 as u32, false);
-            set_codec(&mft, &CODECAPI_AVEncMPVGOPSize, fps * 2, false);
+            let _ = set_codec(&mft, &CODECAPI_AVEncCommonRateControlMode, eAVEncCommonRateControlMode_CBR.0 as u32, false);
+            let _ = set_codec(&mft, &CODECAPI_AVEncMPVGOPSize, fps * 2, false);
             mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
             mft.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
             Ok(Self { mft, w, h, fps, n: 0 })
         }
     }
 
-    /// Codifica un fotograma NV12; devuelve las unidades H.264 (Annex B) producidas.
     /// El siguiente fotograma sale como fotograma clave.
-    pub fn force_keyframe(&self) { set_codec(&self.mft, &CODECAPI_AVEncVideoForceKeyFrame, 1, false); }
+    pub fn force_keyframe(&self) {
+        if let Err(e) = set_codec(&self.mft, &CODECAPI_AVEncVideoForceKeyFrame, 1, false) { eprintln!("no se pudo forzar un fotograma clave: {e}"); }
+    }
 
+    /// Codifica un fotograma NV12; devuelve las unidades H.264 (Annex B) producidas.
     pub fn encode(&mut self, nv12: &[u8]) -> Result<Vec<u8>> {
         let len = (self.w * self.h * 3 / 2) as usize;
         let s = new_sample(len as u32)?;

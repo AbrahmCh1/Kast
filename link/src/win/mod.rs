@@ -63,6 +63,9 @@ pub struct Source {
     pending: bool,
     refine: u8,
     n: u64,
+    /// Para recrear el codificador (fotograma clave a petición).
+    fps: u32,
+    bitrate: u32,
 }
 
 impl Source {
@@ -96,7 +99,8 @@ impl Source {
         };
         let enc = mf::Encoder::new(w as u32, h as u32, fps, mbps * 1_000_000)?;
         let period = Duration::from_secs_f64(1.0 / fps as f64);
-        Ok(Self { cap, enc, w, h, frame, pitch, nv12: vec![0; w * h * 3 / 2], period, next: Instant::now(), pending: true, refine: 0, n: 0 })
+        Ok(Self { cap, enc, w, h, frame, pitch, nv12: vec![0; w * h * 3 / 2], period, next: Instant::now(), pending: true, refine: 0, n: 0,
+                  fps, bitrate: mbps * 1_000_000 })
     }
 
     pub fn size(&self) -> (u32, u32) { (self.w as u32, self.h as u32) }
@@ -105,8 +109,16 @@ impl Source {
 
     /// Fotograma clave con la imagen actual (aunque no haya cambiado).
     pub fn request_keyframe(&mut self) {
-        self.enc.force_keyframe();
+        // El codificador H.264 de Windows acepta CODECAPI_AVEncVideoForceKeyFrame pero lo ignora: se crea uno nuevo,
+        // cuyo primer fotograma siempre es un IDR con SPS/PPS (unos milisegundos; el visor lo pide como mucho cada segundo).
+        match mf::Encoder::new(self.w as u32, self.h as u32, self.fps, self.bitrate) {
+            Ok(e) => self.enc = e,
+            Err(e) => { eprintln!("no se pudo reiniciar el codificador: {e}"); self.enc.force_keyframe(); }
+        }
         self.pending = true;
+        // El codificador entrega cada fotograma con uno de retraso: con la pantalla quieta, un par de fotogramas más
+        // hacen que salga (si no, se quedaría dentro hasta el siguiente cambio de imagen).
+        self.refine = self.refine.max(2);
     }
 
     /// Espera al siguiente intervalo. Some = fotograma codificado; None = sin imagen nueva
@@ -142,7 +154,12 @@ impl Source {
             color::bgra_to_nv12(&self.frame, self.pitch, self.w, self.h, &mut self.nv12);
             let data = self.enc.encode(&self.nv12)?;
             self.n += 1;
-            if data.is_empty() { return Ok(None); }
+            if data.is_empty() {
+                // Media Foundation puede retener el fotograma: con la pantalla quieta no llegaría otro que lo empuje
+                // (el visor se quedaría en negro), así que se vuelve a codificar la misma imagen en el siguiente intervalo.
+                self.refine = self.refine.max(1);
+                return Ok(None);
+            }
             return Ok(Some(Encoded { data, ts_us, work_ms: t0.elapsed().as_secs_f32() * 1e3 }));
         }
     }

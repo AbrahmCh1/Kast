@@ -12,7 +12,8 @@
 //!   {"cmd":"layout_save","path":"…\\X.link"}          guardar con una disposición las sesiones a pantalla completa
 //!   {"cmd":"layout_load","path":"…\\X.link"}          restaurarlas (mantiene las que ya coinciden)
 //!   {"cmd":"send_files","session":5,"paths":["…"]}    enviar archivos o carpetas a la sesión (con control)
-//!   connect admite "auth":"password"|"pair" y "secret": contraseña de acceso desatendido o código de emparejamiento;
+//!   connect admite "screens":[{"monitor":1,"show_on":0},…] para ver varias pantallas del equipo a la vez (una sola
+//!   aprobación), y "auth":"password"|"pair" y "secret": contraseña de acceso desatendido o código de emparejamiento;
 //!   "id" también puede ser el ID de 9 dígitos de un equipo de la red
 //!   {"cmd":"access_set","unknown":"ask"|"reject","unattended":false,"password":"…","unattended_control":true}
 //!   {"cmd":"pair_start","control":true} · {"cmd":"pair_cancel"}   código de emparejamiento de un solo uso
@@ -58,9 +59,25 @@ struct Req {
     platform: String,
     code: String,
     monitor: usize,
+    /// Todas las pantallas que pide ver (con una sola aprobación).
+    monitors: Vec<usize>,
     /// Pide también controlar teclado y ratón.
     control: bool,
     answer: Sender<Answer>,
+}
+
+/// Acceso concedido a un grupo de conexiones de un visor (varias pantallas a la vez, o cambiar de pantalla en iOS):
+/// mientras haya alguna sesión del grupo abierta, las demás pantallas pedidas entran sin volver a preguntar.
+/// Al cerrarse la última, se acaba (volver a entrar pide permiso, como siempre).
+struct Grant {
+    monitors: Vec<usize>,
+    control: bool,
+    via: &'static str,
+    live: usize,
+}
+
+impl Grant {
+    fn valid(&self) -> bool { self.live > 0 }
 }
 
 struct Answer {
@@ -114,6 +131,10 @@ struct State {
     /// Código de emparejamiento activo (de un solo uso).
     pairing: Option<access::PairCode>,
     limiter: access::Limiter,
+    /// Anfitrión: (clave del visor, grupo) -> acceso concedido.
+    grants: HashMap<(String, String), Grant>,
+    /// Visor: grupo de conexiones por dispositivo (se reutiliza para abrir o cambiar de pantalla sin preguntar).
+    groups: HashMap<String, String>,
 }
 
 pub struct Agent {
@@ -177,7 +198,8 @@ impl Agent {
             .map(|s| json!({"id": format!("ip:{}", s.addr), "name": s.addr, "platform": "", "addr": s.addr, "online": false,
                             "trusted": false, "known": false, "manual": true, "sharing": true, "displays": []}))
             .collect();
-        let requests: Vec<Value> = st.requests.iter().map(|r| json!({"req": r.req, "name": r.name, "platform": r.platform, "code": r.code, "monitor": r.monitor, "control": r.control})).collect();
+        let requests: Vec<Value> = st.requests.iter().map(|r| json!({"req": r.req, "name": r.name, "platform": r.platform, "code": r.code, "monitor": r.monitor,
+                                                                   "monitors": r.monitors, "control": r.control})).collect();
         let sessions: Vec<Value> = st.sessions.iter().map(|s| json!({"session": s.session, "dir": s.dir, "peer": s.peer, "monitor": s.monitor, "state": s.state, "code": s.code, "control": s.control, "show_on": s.show_on, "via": s.via})).collect();
         // Dispositivos con acceso a este equipo (emparejados o recordados).
         let trusted: Vec<Value> = st.saved.iter().filter(|s| s.trusted && !s.key.is_empty())
@@ -219,8 +241,15 @@ impl Agent {
                         None => return self.toast(format!("No encuentro el equipo con ID {} en tu red (¿tiene Kast abierto?)", net::short_id_fmt(&digits)), true),
                     }
                 }
+                // Varias pantallas: la primera pide permiso (por todas) y las demás se abren al aceptarse.
+                let mut screens: Vec<(usize, usize)> = v.get("screens").and_then(Value::as_array).into_iter().flatten()
+                    .map(|x| (x["monitor"].as_u64().unwrap_or(1).max(1) as usize, x["show_on"].as_u64().unwrap_or(0) as usize))
+                    .take(16).collect();
+                screens.dedup_by_key(|x| x.0);
+                if screens.is_empty() { screens.push((monitor, show_on)); }
+                let (monitor, show_on) = screens.remove(0);
                 let a = self.clone();
-                std::thread::spawn(move || a.connect(&id, monitor, show_on, control, auth));
+                std::thread::spawn(move || a.connect(&id, monitor, show_on, control, auth, screens));
             }
             "access_set" => self.access_set(&v),
             "pair_start" => {
@@ -244,6 +273,7 @@ impl Agent {
                     name = d.name.clone();
                 }
                 self.save(&st);
+                st.grants.retain(|(k, _), _| *k != key);
                 for x in st.sessions.iter_mut().filter(|x| x.dir == "out" && x.peer_key == key) {
                     x.stopped = true;
                     if let Some(sock) = &x.sock { let _ = sock.shutdown(std::net::Shutdown::Both); }
@@ -362,7 +392,7 @@ impl Agent {
                     a.toast(format!("{} no está en la red: no se pudo abrir su pantalla en tu monitor {}", w.name, w.show_on), true);
                     return;
                 }
-                a.connect(&w.dev, w.monitor, w.show_on, w.control, None);
+                a.connect(&w.dev, w.monitor, w.show_on, w.control, None, Vec::new());
             });
         }
     }
@@ -410,7 +440,8 @@ impl Agent {
 
     // ------------------------------------------------------------ yo veo a otro
 
-    fn connect(self: &Arc<Self>, id: &str, monitor: usize, show_on: usize, control: bool, auth: Option<(String, String)>) {
+    /// `more`: otras pantallas (monitor, dónde mostrarla) que se abren en cuanto el equipo acepte la primera.
+    fn connect(self: &Arc<Self>, id: &str, monitor: usize, show_on: usize, control: bool, auth: Option<(String, String)>, more: Vec<(usize, usize)>) {
         let (addrs, name) = {
             let st = self.st.lock().unwrap();
             if let Some(a) = id.strip_prefix("ip:") {
@@ -432,7 +463,7 @@ impl Agent {
                                                      stopped: false, control, dev: id.to_string(), show_on, want_control: control, files: None,
                                                      via: "", peer_key: String::new() });
         self.emit_state();
-        let r = self.view(session, id, &addrs, &name, monitor, show_on, control, auth.as_ref());
+        let r = self.view(session, id, &addrs, &name, monitor, show_on, control, auth.as_ref(), &more);
         let _ = self.proxy.send_event(viewer::Event::Close(session));
         self.end_session(session);
         match r {
@@ -443,7 +474,7 @@ impl Agent {
 
     #[allow(clippy::too_many_arguments)]
     fn view(self: &Arc<Self>, session: u64, id: &str, addrs: &[SocketAddr], name: &str, monitor: usize, show_on: usize, control: bool,
-            auth: Option<&(String, String)>) -> Res<()> {
+            auth: Option<&(String, String)>, more: &[(usize, usize)]) -> Res<()> {
         // La dirección conocida primero; si no responde, las demás desde las que se anunció.
         let (stream, addr) = addrs.iter().enumerate()
             .find_map(|(i, a)| TcpStream::connect_timeout(a, Duration::from_secs(if i == 0 { 4 } else { 2 })).ok().map(|s| (s, *a)))
@@ -459,8 +490,12 @@ impl Agent {
         let sock = ch.shutdown_handle()?;
         let code = ch.code.clone();
         self.set_session(session, |s| { s.state = "waiting"; s.code = code; s.sock = Some(sock); });
-        let req = json!({"name": self.name, "platform": store::platform(), "monitor": monitor, "control": control,
-                         "auth": auth.map(|(k, _)| k.as_str())}).to_string();
+        // Grupo de este dispositivo: las demás pantallas (ahora o más tarde) entran con el mismo permiso.
+        let group = self.st.lock().unwrap().groups.entry(id.to_string())
+            .or_insert_with(|| { let mut b = [0u8; 12]; let _ = getrandom::fill(&mut b); net::hex(&b) }).clone();
+        let monitors: Vec<usize> = std::iter::once(monitor).chain(more.iter().map(|x| x.0)).collect();
+        let req = json!({"name": self.name, "platform": store::platform(), "monitor": monitor, "monitors": monitors, "group": group,
+                         "control": control, "auth": auth.map(|(k, _)| k.as_str())}).to_string();
         ch.send_typed(msg::REQUEST, req.as_bytes())?;
         let mut m = Vec::new();
         loop {
@@ -475,8 +510,10 @@ impl Agent {
                 Some(&msg::REJECT) => {
                     let (reason, need_auth) = access::reject_reason(&m[1..]);
                     if need_auth {
+                        let screens: Vec<Value> = std::iter::once((monitor, show_on)).chain(more.iter().copied())
+                            .map(|(m, s)| json!({"monitor": m, "show_on": s})).collect();
                         self.emit(json!({"t": "link", "ev": "need_auth", "id": id, "name": name, "monitor": monitor, "show_on": show_on,
-                                         "control": control, "failed": auth.is_some()}));
+                                         "screens": screens, "control": control, "failed": auth.is_some()}));
                     }
                     return Err(reason.into());
                 }
@@ -493,6 +530,11 @@ impl Agent {
         }
         let control = control && granted.get("control").and_then(Value::as_bool).unwrap_or(false);
         self.set_session(session, |s| s.control = control);
+        // Aceptada: se abren las demás pantallas pedidas (entran con el permiso del grupo, sin volver a preguntar).
+        for &(m, show) in more {
+            let (a, id) = (self.clone(), id.to_string());
+            std::thread::spawn(move || a.connect(&id, m, show, control, None, Vec::new()));
+        }
         // Recordar el dispositivo (su identidad, para detectar cambios).
         {
             let mut st = self.st.lock().unwrap();
@@ -606,6 +648,15 @@ impl Agent {
         let monitor = v.get("monitor").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
         let wants_control = v.get("control").and_then(Value::as_bool).unwrap_or(false);
         let auth = v.get("auth").and_then(Value::as_str).unwrap_or("").to_string();
+        let group = v.get("group").and_then(Value::as_str).filter(|g| !g.is_empty() && g.len() <= 64).map(str::to_string);
+        let ndisp = self.displays.lock().unwrap().len().max(1);
+        let mut monitors: Vec<usize> = v.get("monitors").and_then(Value::as_array).into_iter().flatten()
+            .filter_map(Value::as_u64).map(|m| m as usize).filter(|m| (1..=ndisp).contains(m)).take(16).collect();
+        // La app de iOS pide todas (puede cambiar de pantalla durante la sesión).
+        if v.get("all_monitors") == Some(&Value::Bool(true)) { monitors = (1..=ndisp).collect(); }
+        if !monitors.contains(&monitor) { monitors.insert(0, monitor); }
+        monitors.sort_unstable();
+        monitors.dedup();
         if !self.sharing.load(Ordering::Relaxed) {
             ch.send_typed(msg::REJECT, format!("{} no permite ver sus pantallas", self.name).as_bytes())?;
             return Ok(());
@@ -626,7 +677,17 @@ impl Agent {
         let (trusted, mut control) = self.st.lock().unwrap().saved.iter().find(|s| s.key == key && s.trusted)
             .map(|s| (true, s.control)).unwrap_or((false, false));
         let mut via = "trusted";
-        if auth == access::PASSWORD || auth == access::PAIR {
+        // Otra pantalla de un grupo ya aceptado: entra con el mismo permiso, sin volver a preguntar (sólo si no
+        // tiene ya acceso por sí mismo: un dispositivo de confianza conserva el suyo).
+        let has_access = trusted && (!wants_control || control);
+        let granted = group.as_ref().filter(|_| !has_access).and_then(|g| {
+            let st = self.st.lock().unwrap();
+            st.grants.get(&(key.clone(), g.clone())).filter(|gr| gr.valid() && gr.monitors.contains(&monitor)).map(|gr| (gr.control, gr.via))
+        });
+        if let Some((c, v)) = granted {
+            control = c;
+            via = v;
+        } else if auth == access::PASSWORD || auth == access::PAIR {
             // Contraseña de acceso desatendido o código de emparejamiento: entra sin que nadie acepte.
             match self.authenticate(&mut ch, &auth, &key, &name, &plat, peer_addr) {
                 Ok(allow) => { control = allow; via = if auth == access::PAIR { "pair" } else { "password" }; }
@@ -648,8 +709,10 @@ impl Agent {
             let req = self.id();
             let (tx, rx) = channel();
             let code = ch.code.clone();
-            self.st.lock().unwrap().requests.push(Req { req, name: name.clone(), platform: plat.clone(), code: code.clone(), monitor, control: wants_control, answer: tx });
-            self.emit(json!({"t": "link", "ev": "request", "req": req, "name": name, "platform": plat, "code": code, "monitor": monitor, "control": wants_control}));
+            self.st.lock().unwrap().requests.push(Req { req, name: name.clone(), platform: plat.clone(), code: code.clone(), monitor,
+                                                        monitors: monitors.clone(), control: wants_control, answer: tx });
+            self.emit(json!({"t": "link", "ev": "request", "req": req, "name": name, "platform": plat, "code": code, "monitor": monitor,
+                             "monitors": monitors, "control": wants_control}));
             self.emit_state();
             let answer = rx.recv_timeout(Duration::from_secs(90));
             {
@@ -695,7 +758,9 @@ impl Agent {
                 return Ok(());
             }
         };
-        ch.send_typed(msg::ACCEPT, json!({"control": control, "note": note}).to_string().as_bytes())?;
+        // Con sus pantallas: el visor puede ofrecer cambiar de una a otra aunque haya entrado por ID o por IP.
+        let displays: Vec<Value> = self.displays.lock().unwrap().iter().map(|(w, h)| json!([w, h])).collect();
+        ch.send_typed(msg::ACCEPT, json!({"control": control, "note": note, "displays": displays}).to_string().as_bytes())?;
         // Último acceso de los dispositivos con acceso (se ve en «Dispositivos con acceso»).
         {
             let mut st = self.st.lock().unwrap();
@@ -717,6 +782,8 @@ impl Agent {
         store::log(&format!("{name} empieza a {} la pantalla {monitor}", if control { "controlar" } else { "ver" }));
         // El visor puede pedir un fotograma clave (p. ej. la app de iOS al abrir la sesión o si su decodificador falla).
         let keyframe = Arc::new(AtomicBool::new(false));
+        // El hilo que recibe del visor avisa en cuanto la conexión se cierra (ver stream::serve).
+        let closed = Arc::new(AtomicBool::new(false));
         // Con control: teclado y ratón del visor inyectados aquí, portapapeles compartido y archivos recibidos.
         let _clip = if control {
             let (w, h) = src.size();
@@ -728,7 +795,7 @@ impl Agent {
             // En pruebas no se vigila el portapapeles real de este equipo.
             let clip = (!test).then(|| Arc::new(share::ClipSync::start(move |m| tx.lock().unwrap().send(&m).is_ok())));
             let (viewer, host) = (plat.clone(), store::platform());
-            let (clip2, a, peer, kf) = (clip.clone(), self.clone(), name.clone(), keyframe.clone());
+            let (clip2, a, peer, kf, cl) = (clip.clone(), self.clone(), name.clone(), keyframe.clone(), closed.clone());
             std::thread::spawn(move || {
                 let mut m = Vec::new();
                 let mut files = share::FileRecv::new();
@@ -765,20 +832,35 @@ impl Agent {
                         _ => {}
                     }
                 }
+                cl.store(true, Ordering::Relaxed);
             });
             clip
         } else {
             // Sólo vista: lo único que manda el visor es la petición de fotograma clave.
-            let (mut rx, kf) = (ch.try_clone()?, keyframe.clone());
+            let (mut rx, kf, cl) = (ch.try_clone()?, keyframe.clone(), closed.clone());
             std::thread::spawn(move || {
                 let mut m = Vec::new();
                 while rx.recv(&mut m).is_ok() {
                     if m.first() == Some(&msg::KEYFRAME) { kf.store(true, Ordering::Relaxed); }
                 }
+                cl.store(true, Ordering::Relaxed);
             });
             None
         };
-        let r = stream::serve(&mut ch, src, FPS, &keyframe);
+        // Permiso del grupo: las demás pantallas pedidas entran sin preguntar mientras dure (ver Grant).
+        if let Some(g) = &group {
+            let mut st = self.st.lock().unwrap();
+            let gr = st.grants.entry((key.clone(), g.clone())).or_insert(Grant { monitors: Vec::new(), control, via, live: 0 });
+            for m in &monitors { if !gr.monitors.contains(m) { gr.monitors.push(*m); } }
+            gr.control = control;
+            gr.live += 1;
+        }
+        let r = stream::serve(&mut ch, src, FPS, &keyframe, &closed);
+        if let Some(g) = &group {
+            let mut st = self.st.lock().unwrap();
+            if let Some(gr) = st.grants.get_mut(&(key.clone(), g.clone())) { gr.live = gr.live.saturating_sub(1); }
+            st.grants.retain(|_, gr| gr.valid());
+        }
         self.end_session(session);
         store::log(&format!("sesión con {name} terminada{}", r.err().map(|e| format!(": {e}")).unwrap_or_default()));
         Ok(())
@@ -876,6 +958,7 @@ impl Agent {
         st.access.save();
         // Al cambiar o quitar la contraseña (o su permiso) se cortan las sesiones que entraron con ella.
         if cut_password {
+            st.grants.retain(|_, g| g.via != "password");
             for x in st.sessions.iter_mut().filter(|x| x.dir == "out" && x.via == "password") {
                 x.stopped = true;
                 if let Some(sock) = &x.sock { let _ = sock.shutdown(std::net::Shutdown::Both); }

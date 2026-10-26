@@ -27,6 +27,9 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
     private var cx: CGFloat = 0, cy: CGFloat = 0
     private var trackpad = true
     private var liveSeen = false
+    /// Sesión que se está mostrando (cambia al pasar a otra pantalla del equipo).
+    private var shownSession: UInt64 = 0
+    private var screenButton: UIButton!
     private var host: String { client.session?.platform ?? "" }
 
     // MARK: - Vista
@@ -94,6 +97,15 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
 
     private func update(_ s: Session?) {
         guard let s else { return }
+        if s.id != shownSession {
+            // Otra pantalla del equipo: se empieza de nuevo con su imagen y su tamaño.
+            shownSession = s.id
+            liveSeen = false
+            rw = 0; rh = 0
+            video.reset()
+            zoom = 1; offset = .zero
+        }
+        updateScreenMenu(s)
         waitTitle.text = s.state == "waiting" ? "Acepta en \(s.peer)" : "Conectando con \(s.peer)…"
         waitCode.text = s.state == "waiting" ? s.code : ""
         waiting.isHidden = s.state == "live"
@@ -243,11 +255,15 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         blur.layer.cornerRadius = 20
         blur.clipsToBounds = true
         modeButton = barButton("hand.point.up.left", "Modo trackpad o táctil") { [weak self] in self?.toggleMode() }
+        screenButton = barButton("rectangle.on.rectangle", "Cambiar de pantalla") {}
+        screenButton.showsMenuAsPrimaryAction = true
+        screenButton.isHidden = true
         let items = [
             barButton("xmark", "Desconectar") { [weak self] in self?.client.disconnect() },
             modeButton!,
             barButton("keyboard", "Teclado") { [weak self] in self?.toggleKeyboard() },
             barButton("doc.on.clipboard", "Enviar portapapeles") { [weak self] in self?.client.sendClipboard() },
+            screenButton!,
             barButton("arrow.up.left.and.arrow.down.right", "Ver toda la pantalla") { [weak self] in self?.resetZoom() },
         ]
         items.forEach(bar.addArrangedSubview)
@@ -266,6 +282,16 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         // Con el teclado abierto, la barra sigue visible por encima del vídeo.
         view.bringSubviewToFront(blur)
         view.bringSubviewToFront(bar)
+    }
+
+    /// Menú para cambiar a otra pantalla del equipo (sólo si tiene más de una).
+    private func updateScreenMenu(_ s: Session) {
+        guard s.displays.count > 1 else { screenButton.isHidden = true; return }
+        screenButton.isHidden = false
+        screenButton.menu = UIMenu(title: "Pantalla de \(s.peer)", children: s.displays.enumerated().map { i, d in
+            UIAction(title: "Pantalla \(i + 1)", subtitle: d.count == 2 ? "\(d[0]) × \(d[1])" : nil,
+                     state: i + 1 == s.monitor ? .on : .off) { [weak self] _ in self?.client.switchScreen(to: i + 1) }
+        })
     }
 
     private func toggleMode() {
