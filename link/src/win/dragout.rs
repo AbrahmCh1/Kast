@@ -133,16 +133,18 @@ mod tests {
                 PathBuf::from(String::from_utf16_lossy(&buf[..len]))
             }).collect();
             ReleaseStgMedium(&mut m);
-            out
+            // Rutas resueltas (la carpeta temporal puede venir con su nombre corto, p. ej. RUNNER~1).
+            out.iter().map(|p| std::fs::canonicalize(p).unwrap()).collect::<Vec<_>>()
         };
+        let paths_c: Vec<PathBuf> = paths.iter().map(|p| std::fs::canonicalize(p).unwrap()).collect();
         // Antes de soltar no espera (el destino mira los datos mientras se arrastra por encima).
-        assert_eq!(files(&data), paths);
+        assert_eq!(files(&data), paths_c);
         // Soltados: espera a que terminen de llegar.
         dropped.store(true, Ordering::SeqCst);
         let d2 = done.clone();
         let t = std::time::Instant::now();
         std::thread::spawn(move || { std::thread::sleep(Duration::from_millis(300)); d2.finish(true); });
-        assert_eq!(files(&data), paths);
+        assert_eq!(files(&data), paths_c);
         assert!(t.elapsed() >= Duration::from_millis(250));
         let _ = std::fs::remove_dir_all(&dir);
     }
