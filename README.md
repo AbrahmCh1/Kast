@@ -2,7 +2,7 @@
 
 <h1 align="center">Kast</h1>
 
-<p align="center">Control de monitores para <b>Windows</b> y <b>macOS</b>: brillo, contraste, entradas, resolución y disposición,<br>desde la bandeja o la barra de menús, con atajos globales y una interfaz moderna.<br>Y con <b>Kast Link</b>, ve y controla tus otros equipos en cualquiera de tus monitores, por la red local.</p>
+<p align="center">Control de monitores para <b>Windows</b> y <b>macOS</b>: brillo, contraste, entradas, resolución y disposición,<br>desde la bandeja o la barra de menús, con atajos globales y una interfaz moderna.<br>Y con <b>Kast Link</b>, ve y controla tus otros equipos desde cualquiera de tus monitores o desde el <b>iPhone y el iPad</b>, cifrado y por la red local.</p>
 
 <p align="center"><a href="https://github.com/AbrahmCh1/Kast/releases">Descargar</a> · <a href="#windows">Windows</a> · <a href="#macos">macOS</a> · <a href="#kast-link">Kast Link</a> · <a href="#ios-iphone-y-ipad">iOS</a></p>
 
@@ -10,16 +10,23 @@
 
 ## Características
 
+**Monitores**
 - **Brillo, contraste, volumen y entrada** de cada monitor por DDC/CI, en paralelo y respetando los tiempos del protocolo.
 - **Calibración por monitor** para que el mismo porcentaje de brillo se vea igual en pantallas distintas.
 - **Resolución, frecuencia, rotación y monitor principal**; activar y desactivar monitores.
 - **Extender y duplicar** sobre todos los monitores conectados (no sólo los que recuerda Windows).
-- **Disposiciones guardadas**: posición, resolución y monitores activos, restaurables con un clic o un atajo; en Windows también recuerdan qué otros equipos tenías abiertos a pantalla completa y en qué monitor.
+- **Disposiciones guardadas**: posición, resolución y monitores activos, restaurables con un clic o un atajo. En Windows también recuerdan qué otros equipos tenías a pantalla completa y en qué monitor.
 - **Favoritos**: secuencias de comandos (`b all 20; c all 40`) aplicables desde la bandeja o con un atajo.
 - **Atajos globales** configurables, grabados pulsando la combinación.
 - **Cambios seguros**: resolución, rotación, duplicar y disposiciones se revierten solos a los 15 s si no se confirman.
 - **CLI completa** (`kast.exe`) para scripts.
-- **[Kast Link](#kast-link)**: ve y controla otro equipo Windows o Mac en una ventana o a pantalla completa en uno de tus monitores, cifrado y por la red local.
+
+**[Kast Link](#kast-link): tus otros equipos**
+- **Ver y controlar** otro equipo Windows o Mac, en una ventana o a pantalla completa en uno de tus monitores, como AnyDesk.
+- **Portapapeles compartido** (texto e imágenes), **archivos arrastrando** a la ventana y **atajos del sistema** (`Win`, `Alt+Tab`…) hacia el otro equipo.
+- **Acceso:** ID de 9 dígitos por equipo, emparejamiento con código de un solo uso, acceso desatendido con contraseña y lista de dispositivos con acceso.
+- **[App para iPhone y iPad](#ios-iphone-y-ipad)** con modo trackpad, modo táctil y teclado completo.
+- Cifrado de extremo a extremo (Noise XX), sin servidores ni cuentas.
 
 # Windows
 
@@ -27,9 +34,9 @@
 
 | | |
 |---|---|
-| `kast.exe` (CLI) | ~125 KB |
-| `kastd.exe` (bandeja + atajos) | ~200 KB; **~250 KB de RAM** en reposo (2-3 MB tras haber abierto la interfaz), 0 % de CPU |
-| `kast-link.exe` (Kast Link) | ~1 MB; sólo usa CPU mientras hay una sesión abierta |
+| `kast.exe` (CLI) | ~105 KB |
+| `kastd.exe` (bandeja + atajos) | ~210 KB; **~250 KB de RAM** en reposo (2-3 MB tras haber abierto la interfaz), 0 % de CPU |
+| `kast-link.exe` (Kast Link) | ~1,5 MB; sólo usa CPU mientras hay una sesión abierta |
 | Ventana de configuración | WebView2 creado **sólo mientras está abierta**; al cerrarla se liberan sus procesos |
 
 Sin runtime, sin frameworks: Win32 + DXVA2 (DDC/CI) + CCD (`SetDisplayConfig`), compilado con `zig cc`.
@@ -47,7 +54,7 @@ winget install zig.zig
 .\build.ps1
 ```
 
-Genera `bin\kast.exe`, `bin\kastd.exe` y copia `WebView2Loader.dll` y un `kast.ini` de ejemplo.
+Genera `bin\kast.exe`, `bin\kastd.exe` y copia `WebView2Loader.dll` y un `kast.ini` de ejemplo. Si tienes Rust (toolchain MSVC, o GNU con las binutils de MinGW-w64), también compila `bin\kast-link.exe`.
 
 ## Uso
 
@@ -94,7 +101,7 @@ VY279HGR = 10 85
 
 <p align="center"><img src="assets/screenshot-macos.png" width="640" alt="Kast en macOS"></p>
 
-App nativa en Swift que vive en la **barra de menús**: control de brillo por monitor directamente en el menú, favoritos, extender/duplicar y la misma ventana de configuración que en Windows (WKWebView, creada sólo al abrirla). Binario universal (Apple Silicon e Intel), macOS 12 o posterior.
+App nativa en Swift que vive en la **barra de menús**: control de brillo por monitor directamente en el menú, favoritos, extender/duplicar, Kast Link y la misma ventana de configuración que en Windows (WKWebView, creada sólo al abrirla). Binario universal (Apple Silicon e Intel), macOS 12 o posterior.
 
 ## Instalar
 
@@ -115,8 +122,9 @@ Los comandos, favoritos, atajos y la calibración son los mismos que en Windows.
 | Brillo de la pantalla integrada | ✓ |
 | Brillo, contraste, volumen y entrada de monitores externos (DDC/CI) | ✓ en Apple Silicon · ✗ en Macs Intel |
 | Resolución, frecuencia y monitor principal | ✓ |
-| Extender / duplicar, disposiciones guardadas | ✓ |
+| Extender / duplicar, disposiciones guardadas | ✓ (las disposiciones aún no guardan pantallas de otros equipos) |
 | Favoritos, atajos globales, inicio con la sesión | ✓ |
+| Kast Link: compartir, ver y controlar | ✓ |
 | Rotar o desactivar monitores | ✗ (macOS no lo permite con API pública) |
 
 ## Compilar
@@ -129,48 +137,68 @@ Sin más, la app se firma *ad hoc*. Para firmarla con tu certificado (Hardened R
 
 # Kast Link
 
-Ver y **controlar** otro equipo (como AnyDesk) en uno de tus monitores, por la red local y **cifrado**. Es la primera fase de un sistema para unificar varios equipos (Windows y macOS) y asignar pantallas de uno a otro.
+Ver y **controlar** otro equipo (como AnyDesk) en uno de tus monitores, por la red local y **cifrado**. Windows y macOS se entienden entre sí: cualquiera puede compartir y cualquiera puede ver, y desde iOS se puede ver y controlar. Es la base de un sistema para unificar varios equipos y asignar pantallas de uno a otro.
 
-**Se usa desde la app:** Kast → **Dispositivos** («Conectar a dispositivo»).
+## Conectar
 
-1. Abre Kast en los dos equipos. Se detectan solos en la red local (o usa **Agregar dispositivo** con la IP del otro).
+Todo se hace desde Kast → **Dispositivos**.
+
+1. Abre Kast en los dos equipos. Se encuentran solos en la red local; si no, usa **Agregar dispositivo** con la IP del otro, o **Conectar por ID** con su ID de 9 dígitos.
 2. En el que va a ver: elige el dispositivo, **qué pantalla suya** ver y **dónde mostrarla** (una ventana o a pantalla completa en uno de tus monitores) y pulsa **Conectar**. Con **Controlar teclado y ratón** (activado por defecto) puedes escribir, hacer clic, arrastrar y desplazarte en el otro equipo.
-3. En el otro equipo, Kast muestra la petición con un **código de 6 dígitos**: comprueba que coincide con el que ves y pulsa **Aceptar**. Puedes permitir el control o dejar que solo vea. Con **Recordar este dispositivo** no volverá a preguntar.
+3. El otro equipo te deja entrar de una de estas formas:
+   - **Aceptando la petición:** muestra un **código de 6 dígitos** que debe coincidir con el tuyo, y permite el control o sólo la vista. Con **Recordar este dispositivo** no vuelve a preguntar.
+   - **Emparejados:** si os emparejasteis con un código, entras sin preguntar.
+   - **Con su contraseña de acceso desatendido:** pulsa **Contraseña o código** en la tarjeta del dispositivo.
 
-**En el visor**
+Desde **Dispositivos** se ven las sesiones activas y se pueden cortar, y el interruptor **Permitir que otros vean mis pantallas** desactiva las peticiones entrantes.
+
+## En el visor
+
 - Sin control: `Esc` cierra la ventana y `F11` alterna pantalla completa.
 - Con control, todas las teclas van al otro equipo, así que se usan `Ctrl+Alt+Shift+F` (pantalla completa) y `Ctrl+Alt+Shift+Q` (cerrar). Al cambiar de ventana se sueltan las teclas pulsadas.
 - **Atajos del sistema** (visor en Windows): con la ventana en primer plano, `Win`, `Alt+Tab`, `Alt+F4`, `Alt+Esc`, `Alt+Espacio` y `Ctrl+Esc` van al otro equipo en vez de actuar en el tuyo (`Ctrl+Alt+Supr` y `Win+L` siempre se quedan en tu equipo).
 - Entre Windows y Mac, `Ctrl` y `Cmd` se intercambian para que los atajos (copiar, pegar…) funcionen como esperas; en un Mac remoto, `Ctrl+Tab` cambia de app (`Cmd+Tab`).
-- **Portapapeles compartido**: lo que copias en un equipo se puede pegar en el otro, en los dos sentidos (texto e imágenes).
-- **Archivos**: arrastra archivos o carpetas a la ventana del visor y se copian a la carpeta **Descargas** del otro equipo, que los muestra en el Explorador o el Finder. El progreso aparece en el título de la ventana.
+- **Portapapeles compartido:** lo que copias en un equipo se puede pegar en el otro, en los dos sentidos (texto e imágenes).
+- **Archivos:** arrastra archivos o carpetas a la ventana del visor y se copian a la carpeta **Descargas** del otro equipo, que los muestra en el Explorador o el Finder. El progreso aparece en el título de la ventana.
 
 El portapapeles y los archivos sólo funcionan en sesiones con control.
 
-Desde **Dispositivos** se ven las sesiones activas y se pueden cortar, y el interruptor **Permitir que otros vean mis pantallas** desactiva las peticiones entrantes.
+## Acceso a este equipo
 
-**Acceso a este equipo** (Dispositivos → Acceso a este equipo)
-- **Tu ID:** 9 dígitos (por ejemplo `482 913 057`) para conectarte con **Conectar por ID**, sin buscar el equipo en la lista. De momento, dentro de la misma red; es la base para conectarse desde fuera.
-- **Dispositivos desconocidos:** «Preguntar» (cada petición se acepta en pantalla, comprobando el código de 6 dígitos) o «Rechazar» (sólo entran los emparejados o con la contraseña, sin interrumpirte).
-- **Emparejar un dispositivo:** genera un código de un solo uso (por ejemplo `K7QM-4ZP2`, válido 10 minutos) con el permiso que elijas (ver, o ver y controlar). En el otro dispositivo: **Contraseña o código** → Código. Desde entonces entra sin preguntar.
-- **Acceso desatendido:** una contraseña (mínimo 8 caracteres) para entrar sin que nadie acepte, con su permiso. Al cambiarla o desactivarla se cortan las sesiones que entraron con ella.
+En Dispositivos → **Acceso a este equipo**:
+
+- **Tu ID:** 9 dígitos (por ejemplo `482 913 057`) para que otros se conecten con **Conectar por ID**. De momento funciona dentro de la misma red; es la base para conectarse desde fuera.
+- **Dispositivos desconocidos:** «Preguntar» (cada petición se acepta en pantalla) o «Rechazar» (sólo entran los emparejados o con la contraseña, sin interrumpirte con peticiones).
+- **Emparejar un dispositivo:** genera un código de un solo uso (por ejemplo `K7QM-4ZP2`, válido 10 minutos) con el permiso que elijas: ver, o ver y controlar. En el otro dispositivo: **Contraseña o código** → Código. Desde entonces entra sin preguntar.
+- **Acceso desatendido:** una contraseña (mínimo 8 caracteres) para entrar sin que nadie acepte, con su permiso. Al cambiarla o desactivarla se cortan las sesiones que entraron con ella, y mientras alguien está conectado con ella se avisa en este equipo.
 - **Dispositivos con acceso:** los emparejados y recordados, con su permiso y su último acceso. **Quitar acceso** los obliga a volver a pedir permiso y corta su sesión.
 
-La contraseña y el código **nunca se envían**: el equipo manda una sal y el otro responde con una prueba (Argon2id + BLAKE2s-MAC) ligada a esa conexión concreta, que no sirve en ninguna otra. La contraseña se guarda sólo derivada con Argon2id. Tras 5 intentos fallidos en 10 minutos, ese dispositivo queda bloqueado 5 minutos, y cada fallo se avisa y se registra.
+La contraseña y el código **nunca se envían**: el equipo manda una sal y el otro responde con una prueba (Argon2id + BLAKE2s-MAC) ligada a esa conexión concreta, que no sirve en ninguna otra. La contraseña se guarda sólo derivada con Argon2id. Tras 5 intentos fallidos en 10 minutos, ese dispositivo queda bloqueado 5 minutos; cada fallo se avisa y se registra.
 
-**Permisos** (la primera vez)
-- Windows: el del firewall (puertos 47800 TCP y 47801 UDP, redes privadas). Las ventanas de administrador y los avisos de UAC no aceptan el control remoto, igual que en otras herramientas sin servicio del sistema.
-- Mac: **Red local** (para encontrar otros equipos), **Grabación de pantalla** (para compartir) y **Accesibilidad** (para que te controlen). Si falta alguno, Kast → Dispositivos muestra «Dar permiso».
+## En una disposición (Windows)
 
-**En una disposición (Windows):** si guardas una disposición de pantallas mientras tienes otro equipo a pantalla completa en uno de tus monitores, la disposición lo recuerda. Al aplicarla (desde Kast o con su atajo), se restauran los monitores y se vuelve a abrir esa pantalla remota en su monitor, con control si lo tenía. Las sesiones que ya coinciden se mantienen, y las de pantalla completa que no forman parte de la disposición se cierran: aplicar una disposición sin otros equipos (también las guardadas antes de esta función) cierra las pantallas remotas a pantalla completa. Las sesiones en ventana no se tocan. Para que no haya que aceptar nada, marca **Recordar este dispositivo** en el otro equipo.
+Si guardas una disposición de pantallas mientras tienes otro equipo a pantalla completa en uno de tus monitores, la disposición lo recuerda. Al aplicarla (desde Kast o con su atajo), se restauran los monitores y se vuelve a abrir esa pantalla remota en su monitor, con control si lo tenía.
 
-**Windows y macOS se entienden entre sí**: cualquiera puede compartir y cualquiera puede ver.
+- Las sesiones que ya coinciden se mantienen.
+- Las de pantalla completa que no forman parte de la disposición se cierran; también al aplicar una disposición sin otros equipos.
+- Las sesiones en ventana no se tocan.
+
+Para que no haya que aceptar nada al aplicarla, empareja el dispositivo o marca **Recordar este dispositivo** en el otro equipo.
+
+## Permisos (la primera vez)
+
+- **Windows:** el del firewall (puertos 47800 TCP y 47801 UDP, redes privadas). Las ventanas de administrador y los avisos de UAC no aceptan el control remoto, igual que en otras herramientas sin servicio del sistema.
+- **Mac:** **Red local** (para encontrar otros equipos), **Grabación de pantalla** (para compartir) y **Accesibilidad** (para que te controlen). Si falta alguno, Kast → Dispositivos muestra «Dar permiso».
+- **iPhone y iPad:** **Red local** (para encontrar tus equipos).
+
+## Cómo funciona
 
 | | Windows | macOS |
 |---|---|---|
 | Captura | DXGI Desktop Duplication | ScreenCaptureKit (NV12 directo de la GPU) |
 | H.264 | Media Foundation | VideoToolbox (hardware) |
 | Formato en la red | Annex B | AVCC ↔ Annex B, con el SPS ajustado a latencia mínima |
+| Teclado y ratón | `SendInput` (códigos de escaneo y Unicode) | `CGEvent` (con permiso de Accesibilidad) |
 
 | Medido en red local (1080p, 60 fps) | |
 |---|---|
@@ -179,28 +207,31 @@ La contraseña y el código **nunca se envían**: el equipo manda una sal y el o
 | Latencia de la captura a la imagen lista | ~5-10 ms (+ red) |
 | Ancho de banda (escritorio) | 2-5 Mbps; hasta 20 Mbps con vídeo |
 
-- **Seguridad:** cada equipo tiene una identidad propia (X25519) y la conexión usa Noise XX (autenticación mutua + ChaCha20-Poly1305). El equipo que comparte siempre decide: acepta cada petición, o deja entrar a los dispositivos que emparejó o a quien conozca su contraseña de acceso desatendido (comprobada sin enviarla, ligada a la conexión). Al aceptar, ambos muestran el mismo código derivado del cifrado para descartar a alguien en medio. Si la identidad de un dispositivo conocido cambia, la conexión se bloquea.
-- **Arquitectura:** la app arranca `kast-link agent`, que se comunica con ella por stdin/stdout (una línea JSON por mensaje), anuncia el equipo por UDP y abre las ventanas del visor.
-- **Todo nativo:** las APIs de captura y vídeo que ya trae cada sistema, sin códecs ni librerías externas. Escrito en Rust.
-- **Hoja de ruta:** cruce transparente del ratón entre monitores de distintos equipos, atajos del sistema también desde un visor en Mac (`Cmd+Tab`…), recibir archivos del otro equipo, pantallas virtuales (equipos sin monitor) y varias pantallas a la vez.
+- **Seguridad:** cada equipo tiene una identidad propia (X25519) y la conexión usa Noise XX (autenticación mutua + ChaCha20-Poly1305). El equipo que comparte siempre decide quién entra: aceptando cada petición, o dejando entrar a los dispositivos que emparejó o a quien conozca su contraseña de acceso desatendido. Si la identidad de un dispositivo conocido cambia, la conexión se bloquea.
+- **Descubrimiento:** cada equipo se anuncia por UDP (difusión) y responde a consultas directas, que es como lo encuentra la app de iOS.
+- **Arquitectura:** el núcleo (`link/`) es una biblioteca en Rust. En escritorio, la app arranca `kast-link agent`, que se comunica con ella por stdin/stdout (una línea JSON por mensaje) y abre las ventanas del visor. En iOS, la misma biblioteca se enlaza en la app (`link/src/mobile.rs`).
+- **Todo nativo:** las APIs de captura, vídeo y entrada que ya trae cada sistema, sin códecs ni librerías externas.
+- **Hoja de ruta:** conectarse desde fuera de casa (servidor de encuentro y relé, y después conexión directa), cruce transparente del ratón entre monitores de distintos equipos, atajos del sistema también desde un visor en Mac (`Cmd+Tab`…), recibir archivos del otro equipo, pantallas virtuales (equipos sin monitor) y varias pantallas a la vez.
 
-Compilar: `build.ps1` lo incluye si tienes Rust (toolchain MSVC, o GNU con las binutils de MinGW-w64). Pruebas: `cargo test --manifest-path link/Cargo.toml` y `python3 link/tests/e2e.py <kast-link>`.
+Pruebas: `cargo test --manifest-path link/Cargo.toml` y `python3 link/tests/e2e.py <kast-link>` (dos agentes en el mismo equipo: descubrimiento, aprobación, control, disposiciones, archivos, cliente de iOS, contraseña, emparejamiento y límite de intentos).
 
 # iOS (iPhone y iPad)
 
 App para **ver y controlar tus equipos** con Kast desde el iPhone o el iPad, por la red local y con el mismo cifrado que Kast Link. No comparte su propia pantalla.
 
-- **Dispositivos:** encuentra solo los equipos con Kast en tu Wi-Fi (o agrégalos por IP). Toca uno, elige la pantalla y si quieres controlarlo. El otro equipo acepta con el mismo código de 6 dígitos.
+- **Dispositivos:** encuentra solos los equipos con Kast en tu Wi-Fi, con su ID. También puedes agregarlos por IP o **Conectar por ID** (botón **+**).
+- **Conectar:** toca un equipo, elige la pantalla, si quieres controlarlo y cómo entras: pidiendo permiso, con su **contraseña de acceso desatendido** o con un **código de emparejamiento**. Si el equipo sólo acepta emparejados o con contraseña, la app te la pide.
 - **Modo trackpad** (por defecto):
   - desliza un dedo para mover el cursor (con aceleración);
   - toca = clic; dos dedos = clic derecho;
   - mantén pulsado y arrastra = arrastrar;
   - dos dedos deslizando = desplazamiento.
 - **Modo táctil:** tocas donde quieres hacer clic; mantener = clic derecho.
+- **En vertical:** la pantalla remota arriba y debajo un panel de trackpad con botones de **clic izquierdo y derecho** (se pueden mantener pulsados para arrastrar). Con el teclado abierto, el panel se encoge.
 - **Zoom:** pellizca para acercarte; la vista sigue al cursor.
 - **Teclado:**
   - el de iOS escribe tal cual (acentos, ñ, emojis);
-  - la barra de encima añade Esc, Tab, flechas, Supr, Inicio/Fin, F1-F12, los modificadores Ctrl, Alt/⌥, Win/⌘ y ⇧ (se fijan con un toque) y un menú de atajos del sistema remoto;
+  - la barra de encima añade Esc, Tab, flechas, Supr, Inicio/Fin, RePág/AvPág, F1-F12, los modificadores Ctrl, Alt/⌥, Win/⌘ y ⇧ (se fijan con un toque) y un menú de atajos del sistema remoto;
   - en el iPad funcionan el teclado físico, el ratón y el trackpad.
 - **Portapapeles:** el botón lo envía al otro equipo, y lo que copias allí llega al iPhone.
 
@@ -223,14 +254,14 @@ src/daemon.c    Windows: kastd.exe (bandeja, atajos y cola de trabajo)
 src/webui.c     Windows: ventana WebView2 alojada en C (COM a mano)
 src/ui.html     interfaz compartida por Windows y macOS
 mac/Sources/    macOS: app de la barra de menús en Swift (mismo lenguaje de comandos)
-link/           Kast Link: pantalla remota cifrada por la red local (Rust; biblioteca + agente de escritorio)
+link/           Kast Link en Rust: biblioteca (protocolo, cifrado, acceso, vídeo, entrada) y agente de escritorio
 ios/            app de iOS (SwiftUI + UIKit) sobre el núcleo de Kast Link
 assets/         logo (kast.svg) e iconos generados
 tools/          generador de los iconos (make-icon.ps1)
 third_party/    SDK de WebView2 (licencia BSD de Microsoft)
 ```
 
-Las versiones se publican automáticamente al subir una etiqueta `v*`: GitHub Actions compila ambos sistemas, prueba Kast Link de punta a punta, firma y notariza la app de macOS y adjunta los paquetes al Release.
+Las versiones se publican automáticamente al subir una etiqueta `v*`: GitHub Actions compila Windows, macOS e iOS, prueba Kast Link de punta a punta, firma y notariza la app de macOS y adjunta los paquetes de Windows y macOS al Release.
 
 ## Licencia
 
