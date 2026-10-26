@@ -151,6 +151,8 @@ h2 { margin: 26px 0 10px; font-size: 14px; font-weight: 600; }
 .screens .srow select:disabled { opacity: .45; }
 .cal-row { display: grid; grid-template-columns: 110px 1fr 38px; align-items: center; gap: 10px; }
 .cal-row output { text-align: right; color: var(--sub); font-variant-numeric: tabular-nums; }
+.seg button:disabled { opacity: .45; }
+#ctab button { display: inline-flex; align-items: center; gap: 6px; padding: 0 14px; }
 .field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--sub); min-width: 0; }
 .note { font-size: 12.5px; color: var(--sub); padding: 8px 10px; border-radius: 6px; background: var(--card2); border: 1px dashed var(--stroke); }
 
@@ -548,9 +550,10 @@ $$('.nav').forEach(b => b.onclick = () => showTab(b.dataset.tab));
 /* ---------- estado ---------- */
 function applyState(m) {
   S = m;
-  const s = JSON.stringify(m.mons.map(x => [x.i, x.name, x.x, x.y, x.w, x.h, x.pw, x.ph, x.hz, x.rot, x.primary, x.b === null, x.modes.length]));
-  if (s !== sig) { sig = s; renderMap(); renderMons(); } else updateMons();
+  // La configuración primero: las tarjetas muestran si cada monitor está calibrado.
   if (!dirty) { parseIni(m.ini); renderFavs(); }
+  const s = JSON.stringify([m.mons.map(x => [x.i, x.name, x.x, x.y, x.w, x.h, x.pw, x.ph, x.hz, x.rot, x.primary, x.b === null, x.modes.length]), cal]);
+  if (s !== sig) { sig = s; renderMap(); renderMons(); } else updateMons();
   if (!capturing) renderHks();
   renderLayouts();
   $('#autostart').checked = m.autostart;
@@ -618,7 +621,7 @@ function renderMons() {
       </div>
       ${MAC ? '' : `<div class="field">Rotación<div class="seg">${[0, 90, 180, 270].map(d => `<button data-rot="${d}" class="${m.rot === d ? 'on' : ''}">${d}°</button>`).join('')}</div></div>`}
       ${ddc || !m.primary ? `<div class="mon-f">
-        ${ddc ? `<button class="btn subtle${cal[m.name] ? ' on' : ''}" data-a="cal" title="Igualar el brillo con los demás monitores">${icon('sun')}${cal[m.name] ? 'Calibrado' : 'Calibrar'}</button>` : ''}
+        ${ddc ? `<button class="btn subtle${cal[m.name] ? ' on' : ''}" data-a="cal" title="Igualar el brillo y el contraste con los demás monitores">${icon('sun')}${cal[m.name] ? 'Calibrado' : 'Calibrar'}</button>` : ''}
         ${m.primary ? '' : `<button class="btn subtle" data-a="primary" title="Usar como pantalla principal">${icon('star')}Hacer principal</button>
           ${MAC ? '' : `<button class="btn subtle" data-a="disable" title="Desactivar este monitor">${icon('power')}Desactivar</button>`}`}
       </div>` : ''}
@@ -666,35 +669,82 @@ function resync() {
     post('state');
   }, 900);
 }
+/* Calibración por monitor: para el brillo (b) y el contraste (c), una curva de puntos [nivel de Kast, valor real
+ * del monitor en % de su escala]. Se ajustan tres niveles (0, 50 y 100 %) comparando con los demás monitores. */
+const CAL_LEVELS = [0, 50, 100], IDENT = [[0, 0], [100, 100]];
+function parseCurve(v) {
+  const t = v.trim().split(/\s+/);
+  const p = v.includes(':') ? t.map(x => x.split(':').map(Number)) : t.length === 2 ? [[0, +t[0]], [100, +t[1]]] : [];
+  const ok = p.length >= 2 && p[0][0] === 0 && p[p.length - 1][0] === 100 && p[p.length - 1][1] - p[0][1] >= 5 &&
+    p.every(([k, r], i) => r >= 0 && r <= 100 && (!i || (k > p[i - 1][0] && r >= p[i - 1][1])));
+  return ok ? p : null;
+}
+function curveAt(cv, k) {
+  cv = cv || IDENT;
+  for (let i = 0; i + 1 < cv.length; i++)
+    if (k <= cv[i + 1][0]) { const [k0, r0] = cv[i], [k1, r1] = cv[i + 1]; return Math.round(r0 + (k - k0) * (r1 - r0) / (k1 - k0)); }
+  return cv[cv.length - 1][1];
+}
 async function calibrate(m) {
-  const before = S.mons.filter(x => x.b !== null).map(x => [x.i, x.braw]);
-  let [lo, hi] = cal[m.name] || [0, 100];
-  const row = (id, label, v) => `<div class="cal-row"><span>${label}</span><input type="range" min="0" max="100" id="${id}" value="${v}"><output>${v}</output></div>`;
+  const ddc = S.mons.filter(x => x.b !== null);
+  const before = ddc.map(x => [x.i, x.braw, x.c === null ? null : x.craw]);
+  // Con qué monitores se compara: los demás que permiten cambiar ese ajuste.
+  const others = { b: ddc, c: ddc.filter(x => x.c !== null) };
+  for (const t in others) others[t] = others[t].filter(x => x.i !== m.i).map(x => x.i).join(',');
+  const pts = { b: CAL_LEVELS.map(k => curveAt(cal[m.name]?.b, k)), c: CAL_LEVELS.map(k => curveAt(cal[m.name]?.c, k)) };
+  const NAME = { b: 'brillo', c: 'contraste' };
+  let tab = 'b';
   const ok = await modal({
-    title: `Calibrar brillo · ${m.name}`, ok: 'Aplicar',
-    body: `<p class="sub">Elige qué brillo real de este monitor corresponde al 0 % y al 100 % de Kast, para que con el mismo porcentaje todos los monitores se vean igual. El monitor muestra cada valor mientras mueves el control.</p>
-      ${row('clo', '0 % de Kast', lo)}${row('chi', '100 % de Kast', hi)}
-      <div class="btns"><button class="btn" id="cmp0">Comparar todos al 0 %</button><button class="btn" id="cmp100">Comparar al 100 %</button><div class="grow"></div><button class="btn ghost" id="creset">Restablecer</button></div>
+    title: `Calibrar · ${m.name}`, ok: 'Guardar',
+    body: `<p class="sub">Elige qué valor real de este monitor corresponde a cada nivel de Kast, para que con el mismo porcentaje todos los monitores se vean igual.${others.b ? ' Al mover un control, este monitor muestra ese valor y los demás se ponen en ese nivel para que los compares.' : ''}</p>
+      <div class="seg" id="ctab"><button data-t="b" class="on">${icon('sun')}Brillo</button><button data-t="c"${m.c === null ? ' disabled title="Este monitor no permite cambiar el contraste"' : ''}>${icon('contrast')}Contraste</button></div>
+      <div id="crows"></div>
+      <div class="btns"><span class="sub" id="chint"></span><div class="grow"></div><button class="btn ghost" id="creset">Restablecer</button></div>
       <div class="warn" id="cerr"></div>`,
     onOpen: d => {
-      const L = $('#clo', d), Hi = $('#chi', d);
-      const upd = (r, v) => { r.value = v; r.nextElementSibling.textContent = v; fill(r); };
-      for (const r of [L, Hi]) {
-        fill(r);
-        r.oninput = () => { upd(r, r.value); lo = +L.value; hi = +Hi.value; run(`braw ${m.i} ${r.value}`, { key: 'cal', quiet: true }); };
-      }
-      $('#cmp0', d).onclick = () => { run('b all 0', { quiet: true }); run(`braw ${m.i} ${lo}`, { quiet: true }); };
-      $('#cmp100', d).onclick = () => { run('b all 100', { quiet: true }); run(`braw ${m.i} ${hi}`, { quiet: true }); };
-      $('#creset', d).onclick = () => { upd(L, 0); upd(Hi, 100); lo = 0; hi = 100; };
+      const rows = $('#crows', d);
+      const preview = i => run(`${others[tab] ? `${tab} ${others[tab]} ${CAL_LEVELS[i]}; ` : ''}${tab}raw ${m.i} ${pts[tab][i]}`, { key: 'cal', quiet: true });
+      const draw = () => {
+        rows.innerHTML = CAL_LEVELS.map((k, i) => `<div class="cal-row"><span>Kast al ${k} %</span><input type="range" min="0" max="100" data-p="${i}" value="${pts[tab][i]}" aria-label="Valor real del monitor para el ${k} % de Kast"><output>${pts[tab][i]}</output></div>`).join('');
+        $('#chint', d).textContent = `Valores en % de la escala de ${NAME[tab]} del monitor`;
+        $$('input', rows).forEach(r => {
+          fill(r);
+          const i = +r.dataset.p;
+          r.onfocus = () => preview(i);
+          r.oninput = () => {
+            const p = pts[tab], v = +r.value;
+            // Mientras el 50 % siga en la recta entre los extremos (no se ha tocado), los acompaña.
+            const follow = i !== 1 && p[1] === Math.round((p[0] + p[2]) / 2);
+            p[i] = v;
+            // La curva no puede bajar: los niveles vecinos se ajustan.
+            for (let j = 0; j < i; j++) p[j] = Math.min(p[j], v);
+            for (let j = i + 1; j < p.length; j++) p[j] = Math.max(p[j], v);
+            if (follow) p[1] = Math.round((p[0] + p[2]) / 2);
+            $$('input', rows).forEach((x, j) => { x.value = p[j]; x.nextElementSibling.textContent = p[j]; fill(x); });
+            preview(i);
+          };
+        });
+      };
+      $$('#ctab button', d).forEach(b => b.onclick = () => { tab = b.dataset.t; $$('#ctab button', d).forEach(x => x.classList.toggle('on', x === b)); draw(); });
+      $('#creset', d).onclick = () => { pts[tab] = [...CAL_LEVELS]; draw(); };
+      draw();
     },
-    validate: d => hi - lo >= 5 || ($('#cerr', d).textContent = 'El 100 % debe quedar al menos 5 puntos por encima del 0 %', false),
+    validate: d => {
+      const bad = ['b', 'c'].find(t => pts[t][2] - pts[t][0] < 5);
+      if (bad) $('#cerr', d).textContent = `En el ${NAME[bad]}, el 100 % debe quedar al menos 5 puntos por encima del 0 %`;
+      return !bad;
+    },
   });
-  for (const [i, braw] of before) run(`braw ${i} ${braw}`, { quiet: true });
+  for (const [i, braw, craw] of before) run(`braw ${i} ${braw}${craw === null ? '' : `; craw ${i} ${craw}`}`, { quiet: true });
   if (!ok) return;
-  if (lo === 0 && hi === 100) delete cal[m.name]; else cal[m.name] = [lo, hi];
+  // Sin cambios no se guarda nada; si el punto medio cae en medio, basta con los dos extremos.
+  const curve = p => p.every((v, i) => v === CAL_LEVELS[i]) ? null
+    : p[1] === Math.round((p[0] + p[2]) / 2) ? [[0, p[0]], [100, p[2]]] : CAL_LEVELS.map((k, i) => [k, p[i]]);
+  const e = Object.fromEntries(['b', 'c'].map(t => [t, curve(pts[t])]).filter(([, v]) => v));
+  if (Object.keys(e).length) cal[m.name] = e; else delete cal[m.name];
   changed();
   sig = ''; renderMons();
-  toast('Pulsa Guardar para aplicar la calibración');
+  save();
 }
 const allB = $('#allB');
 allB.onchange = resync;
@@ -772,14 +822,15 @@ function parseIni(text) {
     if (!line || line[0] === '#' || line[0] === ';') continue;
     if (line[0] === '[') {
       const s = line.toLowerCase();
-      sec = /^\[(favoritos|favorites)\]/.test(s) ? 1 : /^\[(atajos|hotkeys)\]/.test(s) ? 0 : /^\[(calibracion|calibration)\]/.test(s) ? 3 : 2;
+      sec = /^\[(favoritos|favorites)\]/.test(s) ? 1 : /^\[(atajos|hotkeys)\]/.test(s) ? 0 : /^\[(calibracion|calibration)\]/.test(s) ? 3
+        : /^\[(calibracion-contraste|calibration-contrast)\]/.test(s) ? 4 : 2;
       continue;
     }
     const eq = line.indexOf('='); if (eq < 0) continue;
     const k = line.slice(0, eq).trim(), v = line.slice(eq + 1).trim();
     if (sec === 1) favs.push({ name: k, act: v });
     else if (sec === 0) hks.push({ combo: k.toLowerCase().replace(/\s+/g, ''), act: v });
-    else if (sec === 3) { const [lo, hi] = v.split(/\s+/).map(Number); if (hi - lo >= 5) cal[k] = [lo, hi]; }
+    else if (sec === 3 || sec === 4) { const cv = parseCurve(v); if (cv) (cal[k] ||= {})[sec === 3 ? 'b' : 'c'] = cv; }
   }
 }
 function toIni() {
@@ -787,10 +838,11 @@ function toIni() {
   for (const f of favs) s += `${f.name} = ${f.act}\n`;
   s += '\n[atajos]\n';
   for (const h of hks) if (h.combo && h.act) s += `${h.combo} = ${h.act}\n`;
-  const cs = Object.entries(cal);
-  if (cs.length) {
-    s += '\n# Brillo real (mínimo máximo, en % de la escala del monitor) que corresponde al 0 % y al 100 % de Kast\n[calibracion]\n';
-    for (const [n, [lo, hi]] of cs) s += `${n} = ${lo} ${hi}\n`;
+  for (const [t, sect, what] of [['b', 'calibracion', 'Brillo'], ['c', 'calibracion-contraste', 'Contraste']]) {
+    const cs = Object.entries(cal).filter(([, v]) => v[t]);
+    if (!cs.length) continue;
+    s += `\n# ${what} real de cada monitor (en % de su escala) para cada nivel de Kast: nivel:valor\n[${sect}]\n`;
+    for (const [n, v] of cs) s += `${n} = ${v[t].map(([k, r]) => `${k}:${r}`).join(' ')}\n`;
   }
   return s;
 }

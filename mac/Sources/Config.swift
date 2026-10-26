@@ -13,7 +13,8 @@ enum Config {
     static let lock = NSLock()
     private(set) static var favs: [(name: String, act: String)] = []
     private(set) static var hotkeys: [Hotkey] = []
-    private(set) static var cals: [String: (Int, Int)] = [:]
+    /// Calibración por monitor (nombre en minúsculas): brillo y contraste.
+    private(set) static var cals: [String: (b: Curve, c: Curve)] = [:]
     private(set) static var loaded = false
 
     private static let keyCodes: [String: Int] = {
@@ -66,7 +67,7 @@ enum Config {
     static func load() -> String {
         Paths.ensureIni()
         var log = ""
-        var f: [(String, String)] = [], h: [Hotkey] = [], c: [String: (Int, Int)] = [:]
+        var f: [(String, String)] = [], h: [Hotkey] = [], c: [String: (b: Curve, c: Curve)] = [:]
         let text = (try? String(contentsOf: Paths.ini, encoding: .utf8)) ?? ""
         var sec = 0
         for (n, rawLine) in text.components(separatedBy: .newlines).enumerated() {
@@ -76,7 +77,8 @@ enum Config {
                 let s = line.lowercased()
                 sec = s.hasPrefix("[favoritos]") || s.hasPrefix("[favorites]") ? 1
                     : s.hasPrefix("[atajos]") || s.hasPrefix("[hotkeys]") ? 0
-                    : s.hasPrefix("[calibracion]") || s.hasPrefix("[calibration]") ? 3 : 2
+                    : s.hasPrefix("[calibracion]") || s.hasPrefix("[calibration]") ? 3
+                    : s.hasPrefix("[calibracion-contraste]") || s.hasPrefix("[calibration-contrast]") ? 4 : 2
                 continue
             }
             guard let eq = line.firstIndex(of: "=") else { log += "línea \(n + 1): falta '='\n"; continue }
@@ -87,10 +89,12 @@ enum Config {
             case 0:
                 if let r = parseCombo(key) { h.append(Hotkey(combo: key, keyCode: r.0, mods: r.1, action: act)) }
                 else { log += "línea \(n + 1): tecla inválida '\(key)'\n" }
-            case 3:
-                let p = act.split(separator: " ").compactMap { Int($0) }
-                if p.count == 2, p[0] >= 0, p[1] <= 100, p[1] - p[0] >= 5 { c[key.lowercased()] = (p[0], p[1]) }
-                else { log += "línea \(n + 1): calibración inválida (usa: monitor = mínimo máximo)\n" }
+            case 3, 4:
+                if let cv = Curve(act) {
+                    var e = c[key.lowercased()] ?? (b: Curve.identity, c: Curve.identity)
+                    if sec == 3 { e.b = cv } else { e.c = cv }
+                    c[key.lowercased()] = e
+                } else { log += "línea \(n + 1): calibración inválida (usa: monitor = 0:mínimo 50:medio 100:máximo)\n" }
             default: break
             }
         }
@@ -110,9 +114,11 @@ enum Config {
         return favs.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.act
     }
 
-    static func calibration(_ monitor: String) -> (Int, Int) {
+    /// Curva de calibración del brillo (0x10) o el contraste (0x12) de un monitor; sin calibrar, la identidad.
+    static func calibration(_ monitor: String, _ code: UInt8) -> Curve {
         lock.lock(); defer { lock.unlock() }
-        return cals[monitor.lowercased()] ?? (0, 100)
+        guard let e = cals[monitor.lowercased()] else { return .identity }
+        return code == 0x10 ? e.b : code == 0x12 ? e.c : .identity
     }
 }
 

@@ -19,8 +19,12 @@ typedef struct {
 } Mon;
 
 enum { J_GET, J_SET, J_REL };
-typedef struct { int idx; BYTE code; int mode, pct, lo, hi; long v; DWORD cur, max; int ok; } Job;
-typedef struct { char name[64]; int lo, hi; } Cal;
+/* Calibración: curva de puntos (nivel de Kast en %, valor real en % de la escala del monitor), por tramos rectos. */
+#define MAXPTS 8
+#define MAXCAL 32
+typedef struct { int n; unsigned char k[MAXPTS], r[MAXPTS]; } Curve;
+typedef struct { int idx; BYTE code; int mode, pct; Curve cv; long v; DWORD cur, max; int ok; } Job;
+typedef struct { char name[64]; Curve b, c; } Cal;
 typedef struct { char dev[CCHDEVICENAME]; DWORD k; BYTE code; DWORD cur, max, tick; } Cache;
 
 char exedir[MAX_PATH];
@@ -37,8 +41,9 @@ static Cache cache[64];
 static int ncache;
 static CRITICAL_SECTION cache_cs;
 static int cfg_loaded;
-static Cal cals[MAXMON];
+static Cal cals[MAXCAL];
 static int ncal;
+static const Curve ident = { 2, { 0, 100 }, { 0, 100 } };
 static struct { char dev[CCHDEVICENAME]; DWORD k, tick; } gaps[32];
 static int ngap;
 static int fav_depth;
@@ -338,24 +343,77 @@ static int ddc_set(Mon *m, DWORD k, BYTE code, DWORD v)
     return 0;
 }
 
-/* Calibración de brillo: el 0-100 % de Kast se reparte en [lo, hi] % de la escala del monitor. */
-static void cal_get(const char *name, int *lo, int *hi)
+/* Curva de calibración de un monitor para el brillo (0x10) o el contraste (0x12); sin calibrar, la identidad. */
+static void cal_get(const char *name, BYTE code, Curve *cv)
 {
-    *lo = 0;
-    *hi = 100;
+    *cv = ident;
+    if (code != 0x10 && code != 0x12) return;
     EnterCriticalSection(&cfg_cs);
     for (int i = 0; i < ncal; i++)
-        if (!_stricmp(cals[i].name, name)) { *lo = cals[i].lo; *hi = cals[i].hi; }
+        if (!_stricmp(cals[i].name, name)) *cv = code == 0x10 ? cals[i].b : cals[i].c;
     LeaveCriticalSection(&cfg_cs);
 }
 
-static long to_user(long rawpct, int lo, int hi)
+/* Valor real del monitor (en % de su escala) -> nivel de Kast. */
+static long to_user(long raw, const Curve *c)
 {
-    long v = ((rawpct - lo) * 100 + (hi - lo) / 2) / (hi - lo);
-    return v < 0 ? 0 : v > 100 ? 100 : v;
+    if (raw <= c->r[0]) return 0;
+    for (int i = 0; i + 1 < c->n; i++)
+        if (raw <= c->r[i + 1]) {
+            long dr = c->r[i + 1] - c->r[i], dk = c->k[i + 1] - c->k[i];
+            return c->k[i] + ((raw - c->r[i]) * dk + dr / 2) / dr;
+        }
+    return 100;
 }
 
-static long to_raw(long user, int lo, int hi) { return lo + (user * (hi - lo) + 50) / 100; }
+/* Nivel de Kast (0-100) -> valor real del monitor (en % de su escala). */
+static long to_raw(long user, const Curve *c)
+{
+    for (int i = 0; i + 1 < c->n; i++)
+        if (user <= c->k[i + 1]) {
+            long dk = c->k[i + 1] - c->k[i];
+            return c->r[i] + ((user - c->k[i]) * (c->r[i + 1] - c->r[i]) + dk / 2) / dk;
+        }
+    return c->r[c->n - 1];
+}
+
+/* "0:10 50:40 100:85" (nivel de Kast:valor real) o, como antes, "10 85" (valores para el 0 % y el 100 %).
+ * Los niveles van de 0 a 100 en orden y los valores no bajan; entre el primero y el último, al menos 5 puntos. */
+static int parse_curve(const char *s, Curve *c)
+{
+    c->n = 0;
+    if (!strchr(s, ':')) {
+        int lo, hi;
+        if (sscanf(s, "%d %d", &lo, &hi) != 2 || lo < 0 || hi > 100 || lo > hi) return 0;
+        *c = (Curve){ 2, { 0, 100 }, { (unsigned char)lo, (unsigned char)hi } };
+    } else {
+        for (;;) {
+            while (*s == ' ' || *s == '\t') s++;
+            if (!*s) break;
+            int k, r, used;
+            if (c->n == MAXPTS || sscanf(s, "%d:%d%n", &k, &r, &used) != 2 || k < 0 || k > 100 || r < 0 || r > 100) return 0;
+            c->k[c->n] = (unsigned char)k;
+            c->r[c->n++] = (unsigned char)r;
+            s += used;
+        }
+    }
+    if (c->n < 2 || c->k[0] != 0 || c->k[c->n - 1] != 100) return 0;
+    for (int i = 1; i < c->n; i++)
+        if (c->k[i] <= c->k[i - 1] || c->r[i] < c->r[i - 1]) return 0;
+    return c->r[c->n - 1] - c->r[0] >= 5;
+}
+
+/* Entrada de calibración de un monitor (se crea sin calibrar si no existe). Con cfg_cs tomado. */
+static Cal *cal_slot(const char *name)
+{
+    for (int i = 0; i < ncal; i++)
+        if (!_stricmp(cals[i].name, name)) return &cals[i];
+    if (ncal == MAXCAL) return NULL;
+    Cal *c = &cals[ncal++];
+    snprintf(c->name, sizeof c->name, "%s", name);
+    c->b = c->c = ident;
+    return c;
+}
 
 static DWORD WINAPI job_run(LPVOID arg)
 {
@@ -370,13 +428,13 @@ static DWORD WINAPI job_run(LPVOID arg)
             cache_put(m->dev, k, j->code, cur, max);
         }
         int pct = j->pct && max;
-        long base = pct ? to_user(((long)cur * 100 + max / 2) / max, j->lo, j->hi) : (long)cur;
+        long base = pct ? to_user(((long)cur * 100 + max / 2) / max, &j->cv) : (long)cur;
         j->max = pct ? 100 : max;
         if (j->mode == J_GET) { j->cur = base; j->ok = 1; continue; }
         long nv = j->mode == J_REL ? base + j->v : j->v;
         if (nv < 0) nv = 0;
         if (j->max && nv > (long)j->max) nv = j->max;
-        DWORD raw = pct ? (DWORD)((to_raw(nv, j->lo, j->hi) * (long)max + 50) / 100) : (DWORD)nv;
+        DWORD raw = pct ? (DWORD)((to_raw(nv, &j->cv) * (long)max + 50) / 100) : (DWORD)nv;
         if (ddc_set(m, k, j->code, raw)) {
             cache_put(m->dev, k, j->code, raw, max);
             j->cur = nv;
@@ -387,14 +445,14 @@ static DWORD WINAPI job_run(LPVOID arg)
 }
 
 /* Ejecuta la operación en paralelo (un hilo por monitor); resultados en jobs[].
- * pct: 0 = valor crudo, 1 = porcentaje (calibrado si es brillo), 2 = porcentaje sin calibrar. */
+ * pct: 0 = valor crudo, 1 = porcentaje (calibrado si es brillo o contraste), 2 = porcentaje sin calibrar. */
 static void run_jobs(unsigned mask, BYTE code, int mode, long v, int pct)
 {
     HANDLE th[MAXMON];
     int nt = 0;
     for (int i = 0; i < nmon; i++) {
-        jobs[i] = (Job){ .idx = i, .code = code, .mode = mode, .pct = pct != 0, .lo = 0, .hi = 100, .v = v };
-        if (pct == 1 && code == 0x10) cal_get(mon[i].name, &jobs[i].lo, &jobs[i].hi);
+        jobs[i] = (Job){ .idx = i, .code = code, .mode = mode, .pct = pct != 0, .cv = ident, .v = v };
+        if (pct == 1) cal_get(mon[i].name, code, &jobs[i].cv);
         if (!(mask & (1u << i)) || !phys(&mon[i])) continue;
         th[nt] = CreateThread(NULL, 64 * 1024, job_run, &jobs[i], STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
         if (!th[nt]) job_run(&jobs[i]);
@@ -1046,20 +1104,19 @@ void load_config(Sb *log)
         if (*s == '[') {
             sec = !_strnicmp(s, "[favoritos]", 11) || !_strnicmp(s, "[favorites]", 11) ? 1
                 : !_strnicmp(s, "[atajos]", 8) || !_strnicmp(s, "[hotkeys]", 9) ? 0
-                : !_strnicmp(s, "[calibracion]", 13) || !_strnicmp(s, "[calibration]", 13) ? 3 : 2;
+                : !_strnicmp(s, "[calibracion]", 13) || !_strnicmp(s, "[calibration]", 13) ? 3
+                : !_strnicmp(s, "[calibracion-contraste]", 23) || !_strnicmp(s, "[calibration-contrast]", 22) ? 4 : 2;
             continue;
         }
         char *eq = strchr(s, '=');
         if (!eq) { if (log) sb_printf(log, "línea %d: falta '='\n", ln); continue; }
         *eq = 0;
         char *key = trim(s), *act = trim(eq + 1);
-        if (sec == 3) {
-            int lo, hi;
-            if (ncal < MAXMON && sscanf(act, "%d %d", &lo, &hi) == 2 && lo >= 0 && hi <= 100 && hi - lo >= 5) {
-                snprintf(cals[ncal].name, sizeof cals[ncal].name, "%s", key);
-                cals[ncal].lo = lo;
-                cals[ncal++].hi = hi;
-            } else if (log) sb_printf(log, "línea %d: calibración inválida (usa: monitor = mínimo máximo)\n", ln);
+        if (sec == 3 || sec == 4) {
+            Curve cv;
+            Cal *c = parse_curve(act, &cv) ? cal_slot(key) : NULL;
+            if (c) *(sec == 3 ? &c->b : &c->c) = cv;
+            else if (log) sb_printf(log, "línea %d: calibración inválida (usa: monitor = 0:mínimo 50:medio 100:máximo)\n", ln);
         } else if (sec == 1 && nfav < MAXFAV) {
             favs[nfav++] = (Fav){ _strdup(key), _strdup(act) };
         } else if (sec == 0 && nhk < MAXHK) {
@@ -1123,7 +1180,7 @@ int autostart_set(int on)
 
 /* ---------- estado para la UI ---------- */
 
-typedef struct { int idx, lo, hi; DWORD v[3], braw; int ok[3]; } St;
+typedef struct { int idx; Curve cv[2]; DWORD v[3], raw[2]; int ok[3]; } St;
 static const BYTE st_codes[3] = { 0x10, 0x12, 0x60 };
 
 static DWORD WINAPI st_run(LPVOID arg)
@@ -1135,9 +1192,9 @@ static DWORD WINAPI st_run(LPVOID arg)
         if (!ddc_get(m, 0, st_codes[c], &cur, &max)) continue;
         cache_put(m->dev, 0, st_codes[c], cur, max);
         DWORD pct = max ? (cur * 100 + max / 2) / max : cur;
-        if (c == 0) {
-            s->braw = pct;
-            pct = (DWORD)to_user((long)pct, s->lo, s->hi);
+        if (c < 2) {
+            s->raw[c] = pct;
+            pct = (DWORD)to_user((long)pct, &s->cv[c]);
         }
         s->v[c] = c < 2 ? pct : (cur & 0xFF);
         s->ok[c] = 1;
@@ -1187,7 +1244,8 @@ char *state_json(const char *log)
     int nt = 0;
     for (int i = 0; i < nmon; i++) {
         st[i].idx = i;
-        cal_get(mon[i].name, &st[i].lo, &st[i].hi);
+        cal_get(mon[i].name, 0x10, &st[i].cv[0]);
+        cal_get(mon[i].name, 0x12, &st[i].cv[1]);
         if (!phys(&mon[i])) continue;
         th[nt] = CreateThread(NULL, 64 * 1024, st_run, &st[i], STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
         if (th[nt]) nt++;
@@ -1212,7 +1270,7 @@ char *state_json(const char *log)
         for (int c = 0; c < 3; c++)
             if (st[i].ok[c]) sb_printf(&s, ",\"%s\":%lu", keys_[c], st[i].v[c]);
             else sb_printf(&s, ",\"%s\":null", keys_[c]);
-        sb_printf(&s, ",\"braw\":%lu,\"lo\":%d,\"hi\":%d", st[i].braw, st[i].lo, st[i].hi);
+        sb_printf(&s, ",\"braw\":%lu,\"craw\":%lu", st[i].raw[0], st[i].raw[1]);
         sb_printf(&s, ",\"modes\":[");
         Res *r;
         int n = collect_modes(i, &r);
@@ -1312,6 +1370,7 @@ static const char HELP[] =
     "  b   [mon] [valor]           brillo     (valor: 0-100 | +10 | -10)\n"
     "  braw [mon] [valor]          brillo en la escala real del monitor (sin calibración)\n"
     "  c   [mon] [valor]           contraste\n"
+    "  craw [mon] [valor]          contraste en la escala real del monitor (sin calibración)\n"
     "  vol [mon] [valor]           volumen de los altavoces del monitor\n"
     "  input <mon> [fuente]        hdmi1 hdmi2 dp1 dp2 usbc dvi1 vga1 | 0xNN\n"
     "  power <mon> on|standby|off|hardoff   energía vía DDC/CI\n"
@@ -1379,6 +1438,7 @@ static int run_cmd(int ac, char **av)
     if (IS("list") || IS("ls")) return cmd_list();
     if (IS("b") || IS("bright")) return cmd_feature(ac, av, 0x10, 1);
     if (IS("braw")) return cmd_feature(ac, av, 0x10, 2);
+    if (IS("craw")) return cmd_feature(ac, av, 0x12, 2);
     if (IS("c") || IS("contrast")) return cmd_feature(ac, av, 0x12, 1);
     if (IS("vol")) return cmd_feature(ac, av, 0x62, 1);
     if (IS("vcp")) return cmd_vcp(ac, av);

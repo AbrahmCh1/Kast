@@ -6,11 +6,53 @@ enum Op {
     case get, set(Int), rel(Int)
 }
 
-func toUser(_ rawpct: Int, _ lo: Int, _ hi: Int) -> Int {
-    min(100, max(0, ((rawpct - lo) * 100 + (hi - lo) / 2) / (hi - lo)))
-}
+/// Calibración: puntos (nivel de Kast en %, valor real en % de la escala del monitor), unidos por tramos rectos.
+struct Curve {
+    var k: [Int], r: [Int]
+    static let identity = Curve(k: [0, 100], r: [0, 100])
 
-func toRaw(_ user: Int, _ lo: Int, _ hi: Int) -> Int { lo + (user * (hi - lo) + 50) / 100 }
+    /// "0:10 50:40 100:85" (nivel:valor) o, como antes, "10 85" (valores para el 0 % y el 100 %). Los niveles van
+    /// de 0 a 100 en orden y los valores no bajan; entre el primero y el último, al menos 5 puntos.
+    init?(_ s: String) {
+        let t = s.split(whereSeparator: { $0 == " " || $0 == "\t" })
+        var k: [Int] = [], r: [Int] = []
+        if s.contains(":") {
+            for p in t {
+                let kv = p.split(separator: ":")
+                guard kv.count == 2, let a = Int(kv[0]), let b = Int(kv[1]), (0...100).contains(a), (0...100).contains(b) else { return nil }
+                k.append(a); r.append(b)
+            }
+        } else {
+            guard t.count == 2, let lo = Int(t[0]), let hi = Int(t[1]), lo >= 0, hi <= 100 else { return nil }
+            k = [0, 100]; r = [lo, hi]
+        }
+        guard k.count >= 2, k.count <= 8, k.first == 0, k.last == 100, r.last! - r.first! >= 5 else { return nil }
+        for i in 1..<k.count where k[i] <= k[i - 1] || r[i] < r[i - 1] { return nil }
+        self.k = k
+        self.r = r
+    }
+
+    private init(k: [Int], r: [Int]) { self.k = k; self.r = r }
+
+    /// Valor real del monitor (en % de su escala) -> nivel de Kast.
+    func toUser(_ raw: Int) -> Int {
+        if raw <= r[0] { return 0 }
+        for i in 0..<(k.count - 1) where raw <= r[i + 1] {
+            let dr = r[i + 1] - r[i], dk = k[i + 1] - k[i]
+            return k[i] + ((raw - r[i]) * dk + dr / 2) / dr
+        }
+        return 100
+    }
+
+    /// Nivel de Kast (0-100) -> valor real del monitor (en % de su escala).
+    func toRaw(_ user: Int) -> Int {
+        for i in 0..<(k.count - 1) where user <= k[i + 1] {
+            let dk = k[i + 1] - k[i]
+            return r[i] + ((user - k[i]) * (r[i + 1] - r[i]) + dk / 2) / dk
+        }
+        return r[r.count - 1]
+    }
+}
 
 private typealias LockFn = @convention(c) () -> Int32
 private let lockScreenFn = loadSymbol("/System/Library/PrivateFrameworks/login.framework/Versions/Current/login",
@@ -75,7 +117,7 @@ enum Commands {
 
     // MARK: DDC / brillo
 
-    /// pct: 0 = crudo, 1 = % (calibrado si es brillo), 2 = % sin calibrar. Devuelve el valor final por monitor.
+    /// pct: 0 = crudo, 1 = % (calibrado si es brillo o contraste), 2 = % sin calibrar. Devuelve el valor final por monitor.
     static func feature(_ list: [Monitor], code: UInt8, op: Op, pct: Int) -> [Int?] {
         var res = [Int?](repeating: nil, count: list.count)
         let lock = NSLock()
@@ -87,12 +129,11 @@ enum Commands {
     }
 
     private static func featureOne(_ m: Monitor, code: UInt8, op: Op, pct: Int) -> Int? {
-        let cal = pct == 1 && code == 0x10 ? Config.calibration(m.name) : (0, 100)
-        let lo = cal.0, hi = cal.1
+        let cv = pct == 1 ? Config.calibration(m.name, code) : .identity
         if m.builtin {
             guard code == 0x10, let f = BuiltinBrightness.get(m.id) else { return nil }
             let rawpct = Int((f * 100).rounded())
-            let base = pct > 0 ? toUser(rawpct, lo, hi) : rawpct
+            let base = pct > 0 ? cv.toUser(rawpct) : rawpct
             let nv: Int
             switch op {
             case .get: return base
@@ -100,7 +141,7 @@ enum Commands {
             case .rel(let d): nv = base + d
             }
             let c = min(100, max(0, nv))
-            let raw = pct > 0 ? toRaw(c, lo, hi) : c
+            let raw = pct > 0 ? cv.toRaw(c) : c
             return BuiltinBrightness.set(m.id, Float(raw) / 100) ? c : nil
         }
         guard let ch = m.ddc else { return nil }
@@ -125,7 +166,7 @@ enum Commands {
             put(key, cur, mx)
         }
         let usePct = pct > 0 && mx > 0
-        let base = usePct ? toUser((cur * 100 + mx / 2) / mx, lo, hi) : cur
+        let base = usePct ? cv.toUser((cur * 100 + mx / 2) / mx) : cur
         let nv: Int
         switch op {
         case .get: return base
@@ -134,7 +175,7 @@ enum Commands {
         }
         let top = usePct ? 100 : (mx > 0 ? mx : 0xFFFF)
         let c = min(top, max(0, nv))
-        let raw = usePct ? (toRaw(c, lo, hi) * mx + 50) / 100 : c
+        let raw = usePct ? (cv.toRaw(c) * mx + 50) / 100 : c
         guard ch.write(code, UInt16(clamping: raw)) else { return nil }
         put(key, raw, mx)
         return c
@@ -269,6 +310,7 @@ enum Commands {
         case "list", "ls": return listCmd()
         case "b", "bright": return featureCmd(av, 0x10, 1)
         case "braw": return featureCmd(av, 0x10, 2)
+        case "craw": return featureCmd(av, 0x12, 2)
         case "c", "contrast": return featureCmd(av, 0x12, 1)
         case "vol": return featureCmd(av, 0x62, 1)
         case "vcp":
@@ -390,18 +432,18 @@ enum Commands {
     static func state(log: String) -> [String: Any] {
         Config.ensureLoaded()
         mons = Displays.list()
-        var vals = [[Int?]](repeating: [nil, nil, nil, nil], count: mons.count)   // b, c, in, braw
+        var vals = [[Int?]](repeating: [nil, nil, nil, nil, nil], count: mons.count)   // b, c, in, braw, craw
         let lock = NSLock()
         DispatchQueue.concurrentPerform(iterations: mons.count) { i in
             let m = mons[i]
-            let (lo, hi) = Config.calibration(m.name)
-            var r: [Int?] = [nil, nil, nil, nil]
+            let cb = Config.calibration(m.name, 0x10), cc = Config.calibration(m.name, 0x12)
+            var r: [Int?] = [nil, nil, nil, nil, nil]
             func pct(_ x: (cur: Int, max: Int)) -> Int { x.max > 0 ? (x.cur * 100 + x.max / 2) / x.max : x.cur }
             if m.builtin {
-                if let f = BuiltinBrightness.get(m.id) { let p = Int((f * 100).rounded()); r[0] = toUser(p, lo, hi); r[3] = p }
+                if let f = BuiltinBrightness.get(m.id) { let p = Int((f * 100).rounded()); r[0] = cb.toUser(p); r[3] = p }
             } else if let ch = m.ddc {
-                if let b = ch.read(0x10) { r[0] = toUser(pct(b), lo, hi); r[3] = pct(b); put("\(m.id)-16", b.cur, b.max) }
-                if let c = ch.read(0x12) { r[1] = pct(c) }
+                if let b = ch.read(0x10) { r[0] = cb.toUser(pct(b)); r[3] = pct(b); put("\(m.id)-16", b.cur, b.max) }
+                if let c = ch.read(0x12) { r[1] = cc.toUser(pct(c)); r[4] = pct(c); put("\(m.id)-18", c.cur, c.max) }
                 if let x = ch.read(0x60) { r[2] = x.cur & 0xFF }
             }
             lock.lock(); vals[i] = r; lock.unlock()
@@ -409,12 +451,11 @@ enum Commands {
         func json(_ v: Int?) -> Any { v.map { $0 as Any } ?? NSNull() }
         let list: [[String: Any]] = mons.enumerated().map { i, m in
             let cm = Displays.currentMode(m.id)
-            let (lo, hi) = Config.calibration(m.name)
             return ["i": m.index, "name": m.name, "dev": "ID \(m.id)", "primary": m.primary,
                     "x": Int(m.bounds.minX), "y": Int(m.bounds.minY), "w": Int(m.bounds.width), "h": Int(m.bounds.height),
                     "pw": cm.w, "ph": cm.h, "hz": cm.hz, "rot": Int(CGDisplayRotation(m.id)),
                     "b": json(vals[i][0]), "c": json(vals[i][1]), "in": json(vals[i][2]), "braw": vals[i][3] ?? 0,
-                    "lo": lo, "hi": hi, "modes": Displays.modeList(m.id)]
+                    "craw": vals[i][4] ?? 0, "modes": Displays.modeList(m.id)]
         }
         let ini = (try? String(contentsOf: Paths.ini, encoding: .utf8)) ?? ""
         return ["t": "state", "platform": "mac", "mons": list, "layouts": Layouts.names(), "autostart": Autostart.enabled,
@@ -427,6 +468,7 @@ enum Commands {
       b   [mon] [valor]           brillo     (valor: 0-100 | +10 | -10)
       braw [mon] [valor]          brillo en la escala real del monitor (sin calibración)
       c   [mon] [valor]           contraste
+      craw [mon] [valor]          contraste en la escala real del monitor (sin calibración)
       vol [mon] [valor]           volumen de los altavoces del monitor
       input <mon> [fuente]        hdmi1 hdmi2 dp1 dp2 usbc dvi1 vga1 | 0xNN
       power <mon> on|standby|off|hardoff   energía vía DDC/CI

@@ -12,7 +12,7 @@
 
 **Monitores**
 - **Brillo, contraste, volumen y entrada** de cada monitor por DDC/CI, en paralelo y respetando los tiempos del protocolo.
-- **Calibración por monitor** para que el mismo porcentaje de brillo se vea igual en pantallas distintas.
+- **Calibración de brillo y contraste por monitor**, comparando en vivo con los demás, para que el mismo porcentaje se vea igual en pantallas distintas.
 - **Resolución, frecuencia, rotación y monitor principal**; activar y desactivar monitores.
 - **Extender y duplicar** sobre todos los monitores conectados (no sólo los que recuerda Windows).
 - **Disposiciones guardadas**: posición, resolución y monitores activos, restaurables con un clic o un atajo. En Windows también recuerdan qué otros equipos tenías a pantalla completa y en qué monitor.
@@ -91,9 +91,20 @@ ctrl+alt+1 = fav Noche
 ctrl+alt+num9 = layout load Desktop
 
 [calibracion]
-# brillo real mínimo y máximo (en % del monitor) para el 0 % y el 100 % de Kast
-VY279HGR = 10 85
+# brillo real de cada monitor (en % de su escala) para cada nivel de Kast: nivel:valor
+VY279HGR = 0:10 50:40 100:85
+
+[calibracion-contraste]
+VY279HGR = 0:30 100:75
 ```
+
+### Calibrar monitores
+
+Cada monitor tiene su propia escala: en uno el 100 % de brillo puede verse como el 75 % de otro. Con **Calibrar**, en la tarjeta de cada monitor, eliges qué valor real del monitor corresponde al 0 %, al 50 % y al 100 % de Kast, por separado para el brillo y el contraste. Al mover cada control, ese monitor muestra el valor y los demás se ponen en ese mismo nivel de Kast para compararlos. **Guardar** lo escribe en `kast.ini`, y desde entonces `b`, `c`, los favoritos, los atajos y la interfaz usan esa escala.
+
+- Entre los puntos, la escala es lineal. Mientras no toques el 50 %, sigue la recta entre los extremos.
+- Para ver o fijar el valor real sin calibración: `kast braw` y `kast craw`.
+- El formato anterior, `monitor = mínimo máximo` (solo el 0 % y el 100 % del brillo), se sigue leyendo.
 
 > `Ctrl + Alt` equivale a `AltGr`: evita combinaciones que uses para escribir.
 
