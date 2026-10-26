@@ -10,6 +10,11 @@ use windows::core::w;
 /// Cambia cada vez que alguien escribe en el portapapeles.
 pub fn seq() -> u64 { unsafe { GetClipboardSequenceNumber() as u64 } }
 
+/// Sacar archivos de Windows arrastrándolos hacia otro equipo aún no está disponible (no hay un portapapeles de
+/// arrastre que consultar): nunca hay archivos.
+pub fn drag_seq() -> i64 { 0 }
+pub fn dragged_files(_since: i64) -> Vec<std::path::PathBuf> { Vec::new() }
+
 fn png_format() -> u32 { unsafe { RegisterClipboardFormatW(w!("PNG")) } }
 
 /// Abre el portapapeles (otra app puede tenerlo abierto un momento: se reintenta).

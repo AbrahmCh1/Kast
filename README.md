@@ -23,7 +23,7 @@
 
 **[Kast Link](#kast-link): tus otros equipos**
 - **Ver y controlar** otro equipo Windows o Mac, como AnyDesk: una o **varias de sus pantallas a la vez**, cada una en una ventana o a pantalla completa en uno de tus monitores.
-- **Portapapeles compartido** (texto e imágenes), **archivos arrastrando** a la ventana y **atajos del sistema** (`Win`, `Alt+Tab`…) hacia el otro equipo.
+- **Portapapeles compartido** (texto e imágenes), **archivos arrastrando** en los dos sentidos (a la ventana para enviarlos; desde el Finder del Mac que ves en Windows, hasta tu escritorio, para traerlos) y **atajos del sistema** (`Win`, `Alt+Tab`…) hacia el otro equipo.
 - **Acceso:** ID de 9 dígitos por equipo, emparejamiento con código de un solo uso, acceso desatendido con contraseña y lista de dispositivos con acceso.
 - **[App para iPhone y iPad](#ios-iphone-y-ipad)** con modo trackpad, modo táctil y teclado completo.
 - Cifrado de extremo a extremo (Noise XX), sin servidores ni cuentas.
@@ -172,6 +172,7 @@ Desde **Dispositivos** se ven las sesiones activas y se pueden cortar, y el inte
 - Entre Windows y Mac, `Ctrl` y `Cmd` se intercambian para que los atajos (copiar, pegar…) funcionen como esperas; en un Mac remoto, `Ctrl+Tab` cambia de app (`Cmd+Tab`).
 - **Portapapeles compartido:** lo que copias en un equipo se puede pegar en el otro, en los dos sentidos (texto e imágenes).
 - **Archivos:** arrastra archivos o carpetas a la ventana del visor y se copian a la carpeta **Descargas** del otro equipo, que los muestra en el Explorador o el Finder. El progreso aparece en el título de la ventana.
+- **Traer archivos arrastrando** (viendo un Mac desde Windows): en el visor, arrastra archivos o carpetas desde el Finder del Mac y sácalos de la ventana hasta tu escritorio o una carpeta del Explorador, como en AnyDesk. Se copian al soltar (si aún están llegando, Windows espera a que lleguen enteros) y el arrastre en el Mac se cancela, así que allí no se mueve nada. La primera vez, macOS puede pedir permiso para que Kast lea esa carpeta (Escritorio, Documentos…): acéptalo en el Mac. Desde un Mac viendo Windows todavía no se puede.
 
 El portapapeles y los archivos sólo funcionan en sesiones con control.
 

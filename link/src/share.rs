@@ -178,6 +178,12 @@ fn collect(paths: &[PathBuf]) -> Vec<(PathBuf, String, u64)> {
     out
 }
 
+/// Cuántos archivos y bytes hay en `paths` (las carpetas, enteras).
+pub fn summary(paths: &[PathBuf]) -> (usize, u64) {
+    let files = collect(paths);
+    (files.len(), files.iter().map(|f| f.2).sum())
+}
+
 /// Envía archivos y carpetas. `progress` recibe el texto de estado (None al terminar).
 /// Devuelve (archivos, bytes) enviados.
 pub fn send_files(paths: &[PathBuf], send: &mut dyn FnMut(&[u8]) -> std::io::Result<()>, progress: &dyn Fn(Option<String>)) -> Res<(usize, u64)> {
@@ -227,6 +233,8 @@ pub struct Received {
 /// Recibe archivos en la carpeta de descargas (sin sobrescribir: "nombre (2).ext").
 pub struct FileRecv {
     dir: PathBuf,
+    /// Conserva los nombres (carpeta propia, p. ej. la de un arrastre) en vez de buscar uno libre.
+    keep: bool,
     open: HashMap<u32, (std::fs::File, PathBuf, bool)>,
     /// Primer componente de la ruta recibida -> nombre libre elegido en esta tanda.
     roots: HashMap<String, String>,
@@ -236,7 +244,7 @@ pub struct FileRecv {
 }
 
 /// Componente de ruta seguro: sin separadores, "..", unidades ni caracteres que Windows no admite.
-fn clean(part: &str) -> Option<String> {
+pub fn clean(part: &str) -> Option<String> {
     let s: String = part.chars().map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c }).collect();
     let s = s.trim().trim_end_matches('.').to_string();
     (!s.is_empty() && s != "." && s != "..").then_some(s)
@@ -251,7 +259,12 @@ fn unique(dir: &Path, name: &str) -> String {
 #[cfg(not(target_os = "ios"))]
 impl FileRecv {
     pub fn new() -> Self {
-        Self { dir: downloads_dir(), open: HashMap::new(), roots: HashMap::new(), first: None, count: 0, bytes: 0 }
+        Self { dir: downloads_dir(), keep: false, open: HashMap::new(), roots: HashMap::new(), first: None, count: 0, bytes: 0 }
+    }
+
+    /// Recibe en `dir` con los nombres tal cual llegan (sobrescribe lo que ya haya).
+    pub fn into_dir(dir: PathBuf) -> Self {
+        Self { dir, keep: true, open: HashMap::new(), roots: HashMap::new(), first: None, count: 0, bytes: 0 }
     }
 
     /// Mensaje FILE, FILE_DATA o FILE_END. Devuelve la tanda cuando llega su último archivo.
@@ -265,7 +278,8 @@ impl FileRecv {
                 let (root, rest) = parts.split_first().ok_or("nombre de archivo inválido")?;
                 let _ = std::fs::create_dir_all(&self.dir);
                 let dir = self.dir.clone();
-                let root = self.roots.entry(root.clone()).or_insert_with(|| unique(&dir, root)).clone();
+                let keep = self.keep;
+                let root = self.roots.entry(root.clone()).or_insert_with(|| if keep { root.clone() } else { unique(&dir, root) }).clone();
                 let mut path = self.dir.join(&root);
                 for p in rest { path.push(p); }
                 if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
@@ -298,6 +312,26 @@ impl FileRecv {
         }
         Ok(None)
     }
+}
+
+/// Carpeta nueva para los archivos que se sacan arrastrando del otro equipo (en la carpeta temporal; en las
+/// pruebas, dentro de KAST_LINK_HOME). Se borran las de arrastres anteriores de hace más de una hora.
+#[cfg(not(target_os = "ios"))]
+pub fn drag_dir() -> std::io::Result<PathBuf> {
+    let base = match std::env::var_os("KAST_LINK_HOME") {
+        Some(h) => PathBuf::from(h).join("arrastres"),
+        None => std::env::temp_dir().join("Kast").join("arrastres"),
+    };
+    if let Ok(rd) = std::fs::read_dir(&base) {
+        for e in rd.flatten() {
+            let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|d| d > Duration::from_secs(3600));
+            if old { let _ = std::fs::remove_dir_all(e.path()); }
+        }
+    }
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis();
+    let dir = base.join(stamp.to_string());
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
 }
 
 /// Carpeta de descargas (KAST_LINK_DOWNLOADS para pruebas).
@@ -380,7 +414,7 @@ mod tests {
         std::fs::write(src.join("carpeta/a.txt"), b"hola").unwrap();
         std::fs::write(src.join("carpeta/sub/b.bin"), vec![7u8; 200_000]).unwrap();
         std::fs::create_dir_all(dst.join("carpeta")).unwrap(); // ya existe: se recibe como "carpeta (2)"
-        let mut rx = FileRecv { dir: dst.clone(), open: HashMap::new(), roots: HashMap::new(), first: None, count: 0, bytes: 0 };
+        let mut rx = FileRecv { dir: dst.clone(), keep: false, open: HashMap::new(), roots: HashMap::new(), first: None, count: 0, bytes: 0 };
         let mut done = None;
         let (n, bytes) = send_files(&[src.join("carpeta")], &mut |m| { if let Some(d) = rx.on_message(m).unwrap() { done = Some(d); } Ok(()) }, &|_| {}).unwrap();
         assert_eq!((n, bytes), (2, 200_004));
@@ -389,6 +423,13 @@ mod tests {
         assert_eq!(d.first, dst.join("carpeta (2)"));
         assert_eq!(std::fs::read(dst.join("carpeta (2)/a.txt")).unwrap(), b"hola");
         assert_eq!(std::fs::read(dst.join("carpeta (2)/sub/b.bin")).unwrap().len(), 200_000);
+        // Para un arrastre se conservan los nombres: se llena la carpeta que ya existe (vacía).
+        let mut rx = FileRecv::into_dir(dst.clone());
+        let mut done = None;
+        send_files(&[src.join("carpeta")], &mut |m| { if let Some(d) = rx.on_message(m).unwrap() { done = Some(d); } Ok(()) }, &|_| {}).unwrap();
+        assert_eq!(done.unwrap().first, dst.join("carpeta"));
+        assert_eq!(std::fs::read(dst.join("carpeta/a.txt")).unwrap(), b"hola");
+        assert_eq!(summary(&[src.join("carpeta")]), (2, 200_004));
         let _ = std::fs::remove_dir_all(&base);
     }
 }

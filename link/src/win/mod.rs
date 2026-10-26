@@ -1,6 +1,7 @@
 //! Plataforma Windows: captura DXGI + H.264 de Media Foundation.
 mod capture;
 pub mod clipboard;
+pub mod dragout;
 pub mod syskeys;
 mod color;
 mod input;

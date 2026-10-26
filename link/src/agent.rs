@@ -12,6 +12,7 @@
 //!   {"cmd":"layout_save","path":"…\\X.link"}          guardar con una disposición las sesiones a pantalla completa
 //!   {"cmd":"layout_load","path":"…\\X.link"}          restaurarlas (mantiene las que ya coinciden)
 //!   {"cmd":"send_files","session":5,"paths":["…"]}    enviar archivos o carpetas a la sesión (con control)
+//!   {"cmd":"drag_query","session":5}                  como sacar el ratón del visor con el botón pulsado (pruebas)
 //!   connect admite "screens":[{"monitor":1,"show_on":0},…] para ver varias pantallas del equipo a la vez (una sola
 //!   aprobación), y "auth":"password"|"pair" y "secret": contraseña de acceso desatendido o código de emparejamiento;
 //!   "id" también puede ser el ID de 9 dígitos de un equipo de la red
@@ -105,6 +106,8 @@ struct Sess {
     want_control: bool,
     /// "in" con control: envía archivos al otro equipo.
     files: Option<viewer::FileDrop>,
+    /// "in" con control: mensajes hacia el otro equipo (teclado, ratón, consultas de arrastre).
+    input: Option<Sender<Vec<u8>>>,
     /// "out": cómo entró ("approved" aceptado en pantalla, "trusted" de confianza, "password" acceso desatendido,
     /// "pair" recién emparejado) y su clave pública (para cortar la sesión al quitarle el acceso).
     via: &'static str,
@@ -309,6 +312,11 @@ impl Agent {
             }
             "disconnect" => self.stop_session(n("session")),
             "layout_save" => self.layout_save(&s("path")),
+            // Como sacar el ratón del visor con el botón pulsado (para las pruebas): ¿se arrastran archivos allí?
+            "drag_query" => {
+                let tx = self.st.lock().unwrap().sessions.iter().find(|x| x.session == n("session")).and_then(|x| x.input.clone());
+                if let Some(tx) = tx { let _ = tx.send(vec![msg::DRAG_QUERY]); }
+            }
             "send_files" => {
                 let paths: Vec<std::path::PathBuf> = v.get("paths").and_then(Value::as_array).into_iter().flatten()
                     .filter_map(Value::as_str).map(Into::into).collect();
@@ -460,7 +468,7 @@ impl Agent {
         if addrs.is_empty() { self.toast(format!("{name} no está disponible"), true); return }
         let session = self.id();
         self.st.lock().unwrap().sessions.push(Sess { session, dir: "in", peer: name.clone(), monitor, state: "connecting", code: String::new(), sock: None,
-                                                     stopped: false, control, dev: id.to_string(), show_on, want_control: control, files: None,
+                                                     stopped: false, control, dev: id.to_string(), show_on, want_control: control, files: None, input: None,
                                                      via: "", peer_key: String::new() });
         self.emit_state();
         let r = self.view(session, id, &addrs, &name, monitor, show_on, control, auth.as_ref(), &more);
@@ -571,12 +579,16 @@ impl Agent {
         } else {
             (None, None, None)
         };
-        self.set_session(session, |s| s.files = files.clone());
+        self.set_session(session, |s| { s.files = files.clone(); s.input = input.clone(); });
         let _ = self.proxy.send_event(viewer::Event::Open { session, shared: shared.clone(), monitor: (show_on > 0).then_some(show_on), title, input, files });
         self.set_session(session, |s| s.state = "live");
         let proxy = self.proxy.clone();
+        let mut drag = DragIn { a: self.clone(), session, peer: name.to_string(), recv: None, done: None };
         let r = stream::receive(&mut ch, &shared, w, h, fps, &move || { let _ = proxy.send_event(viewer::Event::Redraw(session)); },
-                                &mut |m| if let Some(c) = &clip { c.on_message(m) });
+                                &mut |m| match m.first() {
+                                    Some(&(msg::DRAG_FILES | msg::FILE | msg::FILE_DATA | msg::FILE_END)) => drag.on_message(m),
+                                    _ => if let Some(c) = &clip { c.on_message(m) },
+                                });
         // Cerrar la ventana o pulsar "Desconectar" corta la conexión a propósito: no es un error.
         let stopped = self.st.lock().unwrap().sessions.iter().any(|s| s.session == session && s.stopped);
         match r {
@@ -621,6 +633,33 @@ impl Agent {
                 busy.store(false, Ordering::SeqCst);
             });
         })
+    }
+
+    /// El visor sacó el ratón de su ventana con el botón pulsado. Si aquí se están arrastrando archivos (el arrastre
+    /// empezó con ese clic), se le dice cuáles y se le envían para que los suelte en su equipo.
+    fn drag_out(self: &Arc<Self>, left: bool, since: i64, ch: &Arc<Mutex<Secure>>, peer: &str) {
+        let (a, ch, peer) = (self.clone(), ch.clone(), peer.to_string());
+        // En su propio hilo: leer los archivos puede hacer que macOS pida permiso (Escritorio, Documentos…), y
+        // mientras tanto el teclado y el ratón del visor tienen que seguir llegando para poder aceptarlo.
+        std::thread::spawn(move || {
+            let paths: Vec<std::path::PathBuf> = match std::env::var_os("KAST_LINK_TEST_DRAG") {
+                Some(p) => vec![p.into()],
+                None if left => platform::clipboard::dragged_files(since),
+                None => Vec::new(),
+            };
+            let items: Vec<Value> = paths.iter().filter_map(|p| Some(json!({"name": p.file_name()?.to_string_lossy(), "dir": p.is_dir()}))).collect();
+            let (count, bytes) = share::summary(&paths);
+            let mut m = vec![msg::DRAG_FILES];
+            m.extend_from_slice(json!({"items": items, "count": count, "bytes": bytes}).to_string().as_bytes());
+            if ch.lock().unwrap().send(&m).is_err() || count == 0 { return; }
+            match share::send_files(&paths, &mut |m| ch.lock().unwrap().send(m), &|_| {}) {
+                Ok((n, bytes)) => store::log(&format!("{peer} saca arrastrando {n} archivo{} ({})", if n == 1 { "" } else { "s" }, share::human(bytes))),
+                Err(e) => {
+                    store::log(&format!("sacar archivos arrastrando hacia {peer}: {e}"));
+                    a.toast(format!("No se pudieron enviar a {peer} los archivos arrastrados: {e}"), true);
+                }
+            }
+        });
     }
 
     // ------------------------------------------------------------ otro me ve
@@ -776,7 +815,7 @@ impl Agent {
         let sock = ch.shutdown_handle().ok();
         if let Some(s) = &sock { s.set_read_timeout(None)?; }
         self.st.lock().unwrap().sessions.push(Sess { session, dir: "out", peer: name.clone(), monitor, state: "live", code: ch.code.clone(), sock,
-                                                     stopped: false, control, dev: String::new(), show_on: 0, want_control: control, files: None,
+                                                     stopped: false, control, dev: String::new(), show_on: 0, want_control: control, files: None, input: None,
                                                      via, peer_key: key.clone() });
         self.emit_state();
         store::log(&format!("{name} empieza a {} la pantalla {monitor}", if control { "controlar" } else { "ver" }));
@@ -792,6 +831,7 @@ impl Agent {
             let mut inj = if test { None } else { Some(platform::Injector::new(monitor, w, h)?) };
             let mut rx = ch.try_clone()?;
             let tx = Mutex::new(ch.try_clone()?);
+            let drag_tx = Arc::new(Mutex::new(ch.try_clone()?));
             // En pruebas no se vigila el portapapeles real de este equipo.
             let clip = (!test).then(|| Arc::new(share::ClipSync::start(move |m| tx.lock().unwrap().send(&m).is_ok())));
             let (viewer, host) = (plat.clone(), store::platform());
@@ -799,11 +839,19 @@ impl Agent {
             std::thread::spawn(move || {
                 let mut m = Vec::new();
                 let mut files = share::FileRecv::new();
+                // Botón izquierdo pulsado desde el visor y el portapapeles de arrastre de ese momento: si cambia
+                // después, ese clic empezó a arrastrar algo (ver drag_out).
+                let (mut left, mut drag_since) = (false, 0i64);
                 while rx.recv(&mut m).is_ok() {
                     match m.first() {
                         Some(&msg::KEYFRAME) => kf.store(true, Ordering::Relaxed),
+                        Some(&msg::DRAG_QUERY) => a.drag_out(left, drag_since, &drag_tx, &peer),
                         Some(&msg::INPUT) => {
                             if let Some(mut e) = input::Event::decode(&m[1..]) {
+                                if let input::Event::Button { button: 0, down, .. } = e {
+                                    left = down;
+                                    if down { drag_since = platform::clipboard::drag_seq(); }
+                                }
                                 if let input::Event::Key { code, .. } = &mut e { *code = input::map_modifier(code, &viewer, host); }
                                 match &mut inj {
                                     Some(i) => i.apply(e),
@@ -1107,5 +1155,72 @@ fn input_json(e: &input::Event) -> Value {
         input::Event::Wheel { dx, dy } => json!({"wheel": [dx, dy]}),
         input::Event::Key { down, code } => json!({"key": code, "down": down}),
         input::Event::Text { text } => json!({"text": text}),
+    }
+}
+
+/// Visor: archivos que se sacan arrastrando del otro equipo (ver msg::DRAG_FILES). Llegan a una carpeta temporal
+/// donde ya existen desde el principio (vacíos), y la ventana arrastra con ellos hacia este equipo.
+struct DragIn {
+    a: Arc<Agent>,
+    session: u64,
+    peer: String,
+    recv: Option<share::FileRecv>,
+    done: Option<Arc<viewer::DragDone>>,
+}
+
+/// Si la sesión se corta a medias, el arrastre en curso se cancela (en vez de esperar archivos que ya no llegan).
+impl Drop for DragIn {
+    fn drop(&mut self) {
+        if let Some(d) = self.done.take() { d.finish(false); }
+    }
+}
+
+impl DragIn {
+    fn on_message(&mut self, m: &[u8]) {
+        if m[0] == msg::DRAG_FILES {
+            let Ok(v) = serde_json::from_slice::<Value>(&m[1..]) else { return };
+            let items: Vec<(String, bool)> = v.get("items").and_then(Value::as_array).into_iter().flatten()
+                .filter_map(|it| Some((share::clean(it.get("name")?.as_str()?)?, it.get("dir").and_then(Value::as_bool).unwrap_or(false))))
+                .collect();
+            if items.is_empty() { return; }
+            // Un arrastre anterior que no terminó de llegar ya no se va a usar.
+            if let Some(d) = self.done.take() { d.finish(false); }
+            let dir = match share::drag_dir() {
+                Ok(d) => d,
+                Err(e) => { self.a.toast(format!("No se pudieron recibir los archivos arrastrados: {e}"), true); return; }
+            };
+            let paths: Vec<std::path::PathBuf> = items.iter().map(|(name, is_dir)| {
+                let p = dir.join(name);
+                let _ = if *is_dir { std::fs::create_dir_all(&p) } else { std::fs::File::create(&p).map(|_| ()) };
+                p
+            }).collect();
+            let done = Arc::new(viewer::DragDone::default());
+            let count = v.get("count").and_then(Value::as_u64).unwrap_or(0);
+            if count == 0 { done.finish(true); }
+            self.recv = (count > 0).then(|| share::FileRecv::into_dir(dir));
+            self.done = (count > 0).then(|| done.clone());
+            self.a.emit(json!({"t": "link", "ev": "drag", "session": self.session, "paths": paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>()}));
+            let _ = self.a.proxy.send_event(viewer::Event::DragOut { session: self.session, paths, done });
+            if count == 0 { self.a.emit(json!({"t": "link", "ev": "drag_done", "session": self.session, "ok": true})); }
+            return;
+        }
+        let Some(r) = &mut self.recv else { return };
+        let end = match r.on_message(m) {
+            Ok(Some(got)) => {
+                store::log(&format!("sacados de {} arrastrando: {} archivo{} ({})", self.peer, got.count, if got.count == 1 { "" } else { "s" }, share::human(got.bytes)));
+                Some(true)
+            }
+            Ok(None) => None,
+            Err(e) => {
+                store::log(&format!("sacar archivos arrastrando de {}: {e}", self.peer));
+                self.a.toast(format!("No se pudieron recibir los archivos arrastrados de {}: {e}", self.peer), true);
+                Some(false)
+            }
+        };
+        if let Some(ok) = end {
+            if let Some(d) = self.done.take() { d.finish(ok); }
+            self.recv = None;
+            self.a.emit(json!({"t": "link", "ev": "drag_done", "session": self.session, "ok": ok}));
+        }
     }
 }

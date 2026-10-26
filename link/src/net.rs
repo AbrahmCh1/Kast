@@ -26,12 +26,18 @@ pub mod msg {
     /// ambos sentidos (sesión con control): portapapeles, u8 tipo (1 texto UTF-8, 2 PNG) + u32 bytes; siguen CLIP_DATA
     pub const CLIP: u8 = 30;
     pub const CLIP_DATA: u8 = 31;
-    /// visor -> anfitrión (sesión con control): archivo, JSON {"id","name" (ruta relativa),"size","last"}
+    /// sesión con control: archivo, JSON {"id","name" (ruta relativa),"size","last"}. Del visor al anfitrión
+    /// (archivos soltados en el visor) y del anfitrión al visor (archivos que se sacan arrastrando, ver DRAG_FILES)
     pub const FILE: u8 = 32;
     /// u32 id + trozo del archivo
     pub const FILE_DATA: u8 = 33;
     /// u32 id: archivo completo
     pub const FILE_END: u8 = 34;
+    /// visor -> anfitrión (sesión con control): el ratón salió del visor con el botón pulsado; ¿se arrastran archivos?
+    pub const DRAG_QUERY: u8 = 35;
+    /// anfitrión -> visor: JSON {"items": [{"name","dir"}], "count", "bytes"} con lo que se arrastra (vacío si nada);
+    /// si hay archivos, siguen FILE / FILE_DATA / FILE_END con su contenido
+    pub const DRAG_FILES: u8 = 36;
     /// visor -> anfitrión: JSON {"name","platform","monitor","control"}
     pub const REQUEST: u8 = 10;
     /// anfitrión -> visor: petición aceptada, JSON {"control": bool, "note": texto} (siguen HELLO y los fotogramas)

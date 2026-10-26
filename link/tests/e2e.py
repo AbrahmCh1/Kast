@@ -10,6 +10,9 @@ import json, os, queue, subprocess, sys, tempfile, threading, time
 
 EXE = sys.argv[1]
 SHOT = sys.argv[2] if len(sys.argv) > 2 else None
+# Sacar archivos arrastrando (paso 15): el anfitrión dice que en su equipo se arrastra esta carpeta.
+DRAG_SRC = os.path.join(tempfile.mkdtemp(prefix="kast-arrastre-"), "Arrastre")
+os.environ["KAST_LINK_TEST_DRAG"] = DRAG_SRC
 
 
 class Agent:
@@ -276,6 +279,32 @@ try:
     B.send(cmd="answer", req=req7["req"], accept=False)
     A.wait(lambda m: m.get("ev") == "toast" and m.get("err"))
     print(f"14) pantallas {[s['monitor'] for s in screens]} con una sola aprobación; al cerrarlas, volver a entrar pide permiso")
+
+    # Sacar archivos arrastrando del visor: B dice que se arrastra una carpeta y A la recibe entera en su carpeta
+    # temporal (la ventana del visor no arrastra nada porque nadie tiene el botón pulsado).
+    os.makedirs(os.path.join(DRAG_SRC, "sub"))
+    with open(os.path.join(DRAG_SRC, "a.txt"), "w", encoding="utf-8") as f:
+        f.write("arrastrado desde B")
+    blob = os.urandom(200_000)
+    with open(os.path.join(DRAG_SRC, "sub", "b.bin"), "wb") as f:
+        f.write(blob)
+    A.send(cmd="connect", id=me_b["id"], monitor=1, show_on=9, control=True)
+    req8 = B.wait(lambda m: m.get("ev") == "request")
+    B.send(cmd="answer", req=req8["req"], accept=True, remember=False, control=True)
+    s = live_session()
+    if s["control"]:
+        A.send(cmd="drag_query", session=s["session"])
+        drag = A.wait(lambda m: m.get("ev") == "drag", 30)
+        done = A.wait(lambda m: m.get("ev") == "drag_done", 30)
+        assert done["ok"], done
+        out = drag["paths"][0]
+        assert os.path.basename(out) == "Arrastre", drag
+        assert open(os.path.join(out, "a.txt"), encoding="utf-8").read() == "arrastrado desde B"
+        assert open(os.path.join(out, "sub", "b.bin"), "rb").read() == blob
+        print(f"15) sacar archivos arrastrando: la carpeta llega entera a {out}")
+    else:
+        print("15) sacar archivos arrastrando: omitido (B no permite el control en este equipo)")
+    hang_up(s)
     print("OK")
 finally:
     for a in (A, B):

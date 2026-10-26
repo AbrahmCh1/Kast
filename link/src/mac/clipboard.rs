@@ -1,11 +1,29 @@
 //! Portapapeles de macOS (NSPasteboard): texto e imágenes (PNG; las TIFF se convierten).
 use crate::share::Clip;
 use objc2::runtime::AnyObject;
-use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF};
-use objc2_foundation::{NSData, NSDictionary, NSString};
+use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardNameDrag, NSPasteboardTypeFileURL, NSPasteboardTypePNG,
+                    NSPasteboardTypeString, NSPasteboardTypeTIFF};
+use objc2_foundation::{NSData, NSDictionary, NSString, NSURL};
+use std::path::PathBuf;
 
 /// Cambia cada vez que alguien escribe en el portapapeles.
 pub fn seq() -> u64 { NSPasteboard::generalPasteboard().changeCount() as u64 }
+
+/// Portapapeles de arrastre: cambia cada vez que empieza un arrastre (p. ej. de archivos en el Finder).
+pub fn drag_seq() -> i64 { NSPasteboard::pasteboardWithName(unsafe { NSPasteboardNameDrag }).changeCount() as i64 }
+
+/// Archivos que se están arrastrando, si el arrastre empezó después de `since` (un `drag_seq` anterior).
+pub fn dragged_files(since: i64) -> Vec<PathBuf> {
+    let pb = NSPasteboard::pasteboardWithName(unsafe { NSPasteboardNameDrag });
+    if pb.changeCount() as i64 == since { return Vec::new(); }
+    let Some(items) = pb.pasteboardItems() else { return Vec::new() };
+    items.iter().filter_map(|it| {
+        let s = it.stringForType(unsafe { NSPasteboardTypeFileURL })?;
+        // El Finder puede dar URLs de referencia (file:///.file/id=…): se convierten en ruta.
+        let path = NSURL::URLWithString(&s)?.filePathURL()?.path()?;
+        Some(PathBuf::from(path.to_string()))
+    }).filter(|p| p.exists()).collect()
+}
 
 pub fn get() -> Option<Clip> {
     let pb = NSPasteboard::generalPasteboard();

@@ -5,8 +5,10 @@ use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
@@ -24,6 +26,17 @@ pub struct Shared {
 /// Envía al otro equipo los archivos soltados en la ventana.
 pub type FileDrop = Arc<dyn Fn(Vec<PathBuf>) + Send + Sync>;
 
+/// Archivos que se sacan arrastrando del otro equipo: siguen llegando (None) o ya terminaron (bien o mal).
+#[derive(Default)]
+pub struct DragDone(AtomicU8);
+
+impl DragDone {
+    pub fn finish(&self, ok: bool) { self.0.store(if ok { 1 } else { 2 }, Ordering::SeqCst); }
+    pub fn state(&self) -> Option<bool> {
+        match self.0.load(Ordering::SeqCst) { 0 => None, s => Some(s == 1) }
+    }
+}
+
 pub enum Event {
     /// Abre la ventana de una sesión. `monitor`: None = ventana, Some(n) = pantalla completa en el monitor n.
     /// `input`: con control, por aquí salen el teclado y el ratón hacia el otro equipo.
@@ -36,6 +49,9 @@ pub enum Event {
     Place { session: u64, monitor: usize },
     /// La sesión terminó (por la red o porque se cerró): se cierra su ventana.
     Close(u64),
+    /// Al sacar el ratón con el botón pulsado, el otro equipo dijo que se arrastraban estos archivos (se están
+    /// recibiendo en una carpeta temporal): la ventana sigue el arrastre en este equipo.
+    DragOut { session: u64, paths: Vec<PathBuf>, done: Arc<DragDone> },
 }
 
 struct Win {
@@ -54,6 +70,10 @@ struct Win {
     files: Option<FileDrop>,
     /// Archivos soltados pendientes de enviar (llegan uno por evento; se envían juntos).
     drops: Vec<PathBuf>,
+    /// Ya se preguntó al otro equipo si se arrastran archivos con este botón pulsado.
+    drag_asked: bool,
+    /// Tras sacar archivos arrastrando, lo que se suelte en esta misma ventana no se reenvía.
+    ignore_drops: Option<Instant>,
     /// HWND de la ventana (Windows: atajos del sistema hacia el otro equipo).
     #[cfg_attr(not(windows), allow(dead_code))]
     hwnd: isize,
@@ -114,6 +134,14 @@ impl Win {
                 if let Some(p) = self.to_remote(position.x, position.y) {
                     if self.pos != Some(p) { self.pos = Some(p); self.send(Input::Move { x: p.0, y: p.1 }); }
                 }
+                // El ratón sale de la ventana con el botón pulsado: quizá en el otro equipo se arrastran archivos
+                // (p. ej. desde el Finder) que se pueden soltar aquí. Sólo en Windows por ahora.
+                let size = self.window.inner_size();
+                let outside = position.x < 0.0 || position.y < 0.0 || position.x >= size.width as f64 || position.y >= size.height as f64;
+                if cfg!(windows) && outside && self.buttons[0] && !self.drag_asked {
+                    self.drag_asked = true;
+                    if let Some(tx) = &self.input { let _ = tx.send(vec![crate::net::msg::DRAG_QUERY]); }
+                }
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let b = match button {
@@ -121,6 +149,7 @@ impl Win {
                     MouseButton::Back => 3, MouseButton::Forward => 4, _ => return false,
                 };
                 let down = *state == ElementState::Pressed;
+                if b == 0 { self.drag_asked = false; }
                 let Some((x, y)) = self.pos else { return false };
                 if !down && !self.buttons[b] { return false; }
                 self.buttons[b] = down;
@@ -242,7 +271,8 @@ impl ApplicationHandler<Event> for App {
             WindowEvent::DroppedFile(p) => {
                 if let Some(w) = self.wins.get_mut(&id) {
                     w.window.set_title(&w.title);
-                    if w.files.is_some() { w.drops.push(p); }
+                    let own = w.ignore_drops.is_some_and(|t| t.elapsed() < Duration::from_secs(2));
+                    if w.files.is_some() && !own { w.drops.push(p); }
                 }
             }
             WindowEvent::RedrawRequested => { if let Some(w) = self.wins.get_mut(&id) { w.draw(); } }
@@ -278,7 +308,7 @@ impl ApplicationHandler<Event> for App {
                 self.by_session.insert(session, id);
                 self.wins.insert(id, Win { session, window, surface, shared, input, layout: (0.0, 0.0, 0.0, 0, 0),
                                            mods: ModifiersState::empty(), keys: HashSet::new(), buttons: [false; 5], pos: None,
-                                           title, files, drops: Vec::new(), hwnd });
+                                           title, files, drops: Vec::new(), drag_asked: false, ignore_drops: None, hwnd });
             }
             Event::Status { session, text } => {
                 if let Some(w) = self.by_session.get(&session).and_then(|id| self.wins.get(id)) {
@@ -292,6 +322,23 @@ impl ApplicationHandler<Event> for App {
             }
             Event::Redraw(s) => {
                 if let Some(w) = self.by_session.get(&s).and_then(|id| self.wins.get(id)) { w.window.request_redraw(); }
+            }
+            Event::DragOut { session, paths, done } => {
+                let Some(w) = self.by_session.get(&session).and_then(|id| self.wins.get_mut(id)) else { return };
+                // Si ya se soltó el botón, el arrastre del otro equipo terminó: no hay nada que seguir.
+                if !w.buttons[0] || paths.is_empty() { return; }
+                #[cfg(windows)]
+                if let Err(e) = crate::platform::dragout::run(w.hwnd, &paths, &done) { eprintln!("arrastrar archivos: {e}"); }
+                #[cfg(not(windows))]
+                let _ = done;
+                // En el otro equipo se cancela su arrastre (si no, soltaría allí los archivos) y se suelta el botón.
+                let (x, y) = w.pos.unwrap_or((0, 0));
+                w.buttons[0] = false;
+                w.drag_asked = false;
+                w.ignore_drops = Some(Instant::now());
+                w.send(Input::Key { down: true, code: "Escape".into() });
+                w.send(Input::Key { down: false, code: "Escape".into() });
+                w.send(Input::Button { button: 0, down: false, x, y });
             }
             Event::Close(s) => {
                 if let Some(id) = self.by_session.remove(&s) {
