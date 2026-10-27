@@ -307,9 +307,9 @@ try:
         print("15) sacar archivos arrastrando: omitido (B no permite el control en este equipo)")
     hang_up(s)
 
-    # Pantallas virtuales: A pide la pantalla 1 de B en un monitor y una virtual nueva en el monitor de su derecha. En un
-    # Mac, B la crea con ese tamaño, A abre las dos con una sola aprobación y al desconectar B la quita; si B no puede
-    # crearla (Windows), A recibe el motivo y ve sólo la 1.
+    # Pantallas virtuales: A pide la pantalla 1 de B en un monitor y una virtual nueva en el monitor de su derecha. Si B
+    # puede (un Mac, o Windows con el controlador de Parsec), la crea con ese tamaño, A abre las dos con una sola
+    # aprobación y al desconectar B la quita; si no, A recibe el motivo y ve sólo la 1.
     nb = len(B.settled(lambda m: True)["me"]["displays"])
     A.send(cmd="connect", id=me_b["id"], control=False, screens=[
         {"monitor": 1, "show_on": 9, "at": [0, 0, 1920, 1080]},
@@ -332,7 +332,7 @@ try:
         print(f"16) pantalla virtual de 1280×720 creada en B, vista junto a su pantalla 1 y quitada al desconectar")
     else:
         if me_b.get("vd"):
-            print(f"::warning::B (macOS) no pudo crear la pantalla virtual en este equipo: {got['msg']}")
+            print(f"::warning::B no pudo crear la pantalla virtual en este equipo: {got['msg']}")
         hang_up(live_session())
         print(f"16) pantallas virtuales: A ve sólo la pantalla 1 y recibe «{got['msg']}»")
     print("OK")

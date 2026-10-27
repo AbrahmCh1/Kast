@@ -23,7 +23,7 @@
 
 **[Kast Link](#kast-link): tus otros equipos**
 - **Ver y controlar** otro equipo Windows o Mac, como AnyDesk: una o **varias de sus pantallas a la vez**, cada una en una ventana o a pantalla completa en uno de tus monitores.
-- **Pantallas virtuales** en un Mac: si tiene una pantalla y tú tienes tres monitores, le añades las que quieras, con el tamaño de tus monitores y colocadas como ellos; el ratón (y lo que arrastras) pasa de una a otra.
+- **Pantallas virtuales**: si el otro equipo tiene una pantalla y tú tienes tres monitores, le añades las que quieras, con el tamaño de tus monitores y colocadas como ellos; el ratón (y lo que arrastras) pasa de una a otra. En un Mac sin instalar nada; en Windows, con el controlador de pantalla virtual de Parsec.
 - **Portapapeles compartido** (texto e imágenes), **archivos arrastrando** en los dos sentidos (a la ventana para enviarlos; desde el Finder del Mac que ves en Windows, hasta tu escritorio, para traerlos) y **atajos del sistema** (`Win`, `Alt+Tab`…) hacia el otro equipo.
 - **Acceso:** ID de 9 dígitos por equipo, emparejamiento con código de un solo uso, acceso desatendido con contraseña y lista de dispositivos con acceso.
 - **[App para iPhone y iPad](#ios-iphone-y-ipad)** con modo trackpad, modo táctil y teclado completo.
@@ -179,16 +179,17 @@ El portapapeles y los archivos sólo funcionan en sesiones con control.
 
 ## Pantallas virtuales
 
-Para manejar un equipo con más pantallas de las que tiene (un Mac con un monitor, desde tu PC con tres), Kast le crea **pantallas virtuales** mientras lo ves:
+Para manejar un equipo con más pantallas de las que tiene (un Mac o un PC con un monitor, desde tu equipo con tres), Kast le crea **pantallas virtuales** mientras lo ves:
 
-1. En la tarjeta del Mac, elige en qué monitor tuyo ves su pantalla real.
+1. En la tarjeta del equipo, elige en qué monitor tuyo ves su pantalla real.
 2. Pulsa **Añadir pantalla virtual** (o un monitor **libre** en el mapa «Así quedará en tus monitores») y elige en qué monitor tuyo irá cada una. Por ejemplo, con tres monitores y queriendo usar dos: su pantalla en el del centro y una virtual en el de la derecha.
-3. **Conectar**: con una sola aprobación, el Mac crea cada pantalla virtual con la resolución de tu monitor (Retina si tu monitor está al 150 % o más) y la **coloca junto a la suya como están tus monitores**: a la derecha, a la izquierda, encima o debajo, a la misma altura. Cada una se abre a pantalla completa en su monitor.
+3. **Conectar**: con una sola aprobación, el equipo crea cada pantalla virtual con la resolución y la escala de tu monitor (en un Mac, Retina si tu monitor está al 150 % o más) y la **coloca junto a la suya como están tus monitores**: a la derecha, a la izquierda, encima o debajo, a la misma altura. Cada una se abre a pantalla completa en su monitor.
 
-Así el ratón pasa de una pantalla a otra como entre tus monitores, y con el botón pulsado puedes **arrastrar ventanas** de la pantalla del Mac a la virtual. Al cerrar la ventana de una pantalla virtual (o desconectar), el Mac la quita y lleva sus ventanas a las que quedan; si Kast se cierra, también desaparecen. En el Mac aparecen en Ajustes del Sistema → Pantallas como «Kast · <tu equipo>».
+Así el ratón pasa de una pantalla a otra como entre tus monitores, y con el botón pulsado puedes **arrastrar ventanas** de su pantalla a la virtual. Al cerrar la ventana de una pantalla virtual (o desconectar), el equipo la quita y lleva sus ventanas a las que quedan; si Kast se cierra, también desaparecen. Sólo existen mientras las ves: no cambian la configuración de pantallas guardada del equipo. En un Mac aparecen en Ajustes del Sistema → Pantallas como «Kast · <tu equipo>»; en Windows, en Configuración → Pantalla, como una pantalla más (de Parsec).
 
 - Las virtuales se colocan junto a una de sus pantallas reales, así que al menos una tiene que verse a pantalla completa en uno de tus monitores.
-- De momento sólo un **Mac** puede crearlas (macOS 11 o posterior, sin instalar nada). En Windows hace falta un controlador de pantalla indirecta, todavía no incluido.
+- Un **Mac** puede crearlas con macOS 11 o posterior, sin instalar nada.
+- Un **Windows** necesita el controlador de pantalla virtual de Parsec (Parsec VDD), que viene con [Parsec](https://parsec.app) y también se instala suelto desde [parsec-vdd](https://github.com/nomi-san/parsec-vdd). Windows no trae ninguno, y uno propio de Kast tendría que firmarlo Microsoft. Kast usa el modo del controlador más parecido al de tu monitor (tiene los habituales, de 1280×720 a 4096×2160). Si el equipo no lo tiene, su tarjeta lo indica.
 - Una disposición guardada con pantallas virtuales las vuelve a crear al aplicarla.
 
 ## Acceso a este equipo
@@ -229,7 +230,7 @@ Para que no haya que aceptar nada al aplicarla, empareja el dispositivo o marca 
 | H.264 | Media Foundation | VideoToolbox (hardware) |
 | Formato en la red | Annex B | AVCC ↔ Annex B, con el SPS ajustado a latencia mínima |
 | Teclado y ratón | `SendInput` (códigos de escaneo y Unicode) | `CGEvent` (con permiso de Accesibilidad) |
-| Pantallas virtuales | (aún no) | `CGVirtualDisplay`, colocadas con `CGConfigureDisplayOrigin` |
+| Pantallas virtuales | Controlador de Parsec (IddCx) por `DeviceIoControl`, colocadas con `SetDisplayConfig` | `CGVirtualDisplay`, colocadas con `CGConfigureDisplayOrigin` |
 
 | Medido en red local (1080p, 60 fps) | |
 |---|---|
@@ -242,7 +243,7 @@ Para que no haya que aceptar nada al aplicarla, empareja el dispositivo o marca 
 - **Descubrimiento:** cada equipo se anuncia por UDP (difusión) y responde a consultas directas, que es como lo encuentra la app de iOS.
 - **Arquitectura:** el núcleo (`link/`) es una biblioteca en Rust. En escritorio, la app arranca `kast-link agent`, que se comunica con ella por stdin/stdout (una línea JSON por mensaje) y abre las ventanas del visor. En iOS, la misma biblioteca se enlaza en la app (`link/src/mobile.rs`).
 - **Todo nativo:** las APIs de captura, vídeo y entrada que ya trae cada sistema, sin códecs ni librerías externas.
-- **Hoja de ruta:** conectarse desde fuera de casa (servidor de encuentro y relé, y después conexión directa), cruce transparente del ratón entre monitores de distintos equipos, atajos del sistema también desde un visor en Mac (`Cmd+Tab`…), recibir archivos desde un visor en Mac y pantallas virtuales en un Windows (con un controlador de pantalla indirecta).
+- **Hoja de ruta:** conectarse desde fuera de casa (servidor de encuentro y relé, y después conexión directa), cruce transparente del ratón entre monitores de distintos equipos, atajos del sistema también desde un visor en Mac (`Cmd+Tab`…) y recibir archivos desde un visor en Mac.
 
 Pruebas: `cargo test --manifest-path link/Cargo.toml` y `python3 link/tests/e2e.py <kast-link>` (dos agentes en el mismo equipo: descubrimiento, aprobación, control, disposiciones, archivos, cliente de iOS, contraseña, emparejamiento, límite de intentos, varias pantallas, archivos y pantallas virtuales).
 

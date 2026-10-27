@@ -1229,6 +1229,7 @@ function renderLink() {
       sbox.innerHTML = `<div class="head"><span>${scr.length > 1 ? 'Sus pantallas (puedes ver varias a la vez)' : 'Su pantalla'}</span><span>Mostrar en</span></div>
         ${rows}${vrows}
         ${d.vd && mons.length ? `<button class="btn ghost vadd" data-a="vadd"${free().length ? ' title="Una pantalla más en ' + esc(d.name) + ', del tamaño de uno de tus monitores"' : ' disabled'}>${icon('plus')}Añadir pantalla virtual</button>` : ''}
+        ${!d.vd && d.platform === 'windows' && d.online && d.sharing && mons.length ? `<div class="vhead">Para añadirle pantallas virtuales, instala en ${esc(d.name)} el controlador de pantalla virtual de Parsec</div>` : ''}
         ${mons.length && (fulls || (d.vd && mons.length > 1)) ? mapHtml() : ''}
         ${anchored() ? '' : '<div class="note">Las pantallas virtuales se colocan junto a una de sus pantallas reales: muestra al menos una a pantalla completa en uno de tus monitores.</div>'}`;
       $$('[data-show]', sbox).forEach(x => {

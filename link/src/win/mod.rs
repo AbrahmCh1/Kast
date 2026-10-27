@@ -52,8 +52,11 @@ pub fn displays() -> Res<Vec<DisplayInfo>> {
         .collect())
 }
 
-/// Ids de los monitores, en el orden de Kast (en Windows, su número).
-pub fn display_ids() -> Vec<u32> { (1..=capture::outputs().map(|o| o.len()).unwrap_or(0) as u32).collect() }
+/// Ids de los monitores, en el orden de Kast: el número de Windows (\\.\DISPLAYn), que no cambia al añadir o quitar
+/// otros (el orden de Kast sí: va de izquierda a derecha).
+pub fn display_ids() -> Vec<u32> {
+    capture::outputs().unwrap_or_default().iter().map(|o| o.name.trim_start_matches(r"\\.\DISPLAY").parse().unwrap_or(0)).collect()
+}
 
 /// Rectángulo de cada monitor en el escritorio virtual, en píxeles.
 pub fn display_bounds() -> Vec<Rect> {

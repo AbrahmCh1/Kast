@@ -48,6 +48,8 @@ impl Drop for Virtual {
     }
 }
 
+pub const UNSUPPORTED: &str = "esta versión de macOS no permite crear pantallas virtuales";
+
 pub fn supported() -> bool { AnyClass::get(c"CGVirtualDisplay").is_some() }
 
 /// En el hilo principal (el agente tiene ahí el bucle de ventanas, que atiende la cola principal).
@@ -67,11 +69,13 @@ fn queue() -> &'static dispatch2::DispatchRetained<dispatch2::DispatchQueue> {
 }
 
 fn class(name: &CStr) -> Result<&'static AnyClass, String> {
-    AnyClass::get(name).ok_or_else(|| "esta versión de macOS no permite crear pantallas virtuales".into())
+    AnyClass::get(name).ok_or_else(|| UNSUPPORTED.into())
 }
 
-/// Crea una pantalla de `px` píxeles reales (con `hidpi`, Retina: la mitad en puntos) y espera a que aparezca.
-pub fn create(name: &str, px: (u32, u32), hidpi: bool) -> Res<Virtual> {
+/// Crea una pantalla de `px` píxeles reales (con la escala del monitor del visor desde 1,5, Retina: la mitad en puntos)
+/// y espera a que aparezca.
+pub fn create(name: &str, px: (u32, u32), scale: f64) -> Res<Virtual> {
+    let hidpi = scale >= 1.5;
     let (pw, ph) = (px.0.clamp(640, 7680) & !1, px.1.clamp(480, 4320) & !1);
     let slot = {
         let live = LIVE.lock().unwrap();

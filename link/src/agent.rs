@@ -1088,20 +1088,22 @@ impl Agent {
     /// virtual (None si no se pudo crear).
     #[allow(clippy::type_complexity)]
     fn make_virtual(&self, plan: &Value, viewer: &str) -> Res<(Vec<platform::vdisplay::Virtual>, Vec<(usize, usize)>, Vec<Option<usize>>)> {
-        if !platform::vdisplay::supported() { return Err("de momento sólo se pueden crear en un Mac".into()); }
+        if !platform::vdisplay::supported() { return Err(platform::vdisplay::UNSUPPORTED.into()); }
         let ids_before = platform::display_ids();
         let fixed: Vec<(u32, Rect)> = plan["fixed"].as_array().into_iter().flatten()
             .filter_map(|f| Some((*ids_before.get((f.get("monitor")?.as_u64()? as usize).checked_sub(1)?)?, Rect::from_json(f.get("at")?)?)))
             .collect();
-        let wanted: Vec<Option<(Rect, (u32, u32), bool)>> = plan["virtual"].as_array().into_iter().flatten().take(4).map(|x| {
+        // Escala del monitor del visor (los visores anteriores sólo dicen si es Retina).
+        let wanted: Vec<Option<(Rect, (u32, u32), f64)>> = plan["virtual"].as_array().into_iter().flatten().take(4).map(|x| {
             let px = x.get("px")?;
-            Some((Rect::from_json(x.get("at")?)?, (px.get(0)?.as_u64()? as u32, px.get(1)?.as_u64()? as u32), x.get("hidpi")?.as_bool()?))
+            let scale = x.get("scale").and_then(Value::as_f64).unwrap_or(if x.get("hidpi")?.as_bool()? { 2.0 } else { 1.0 });
+            Some((Rect::from_json(x.get("at")?)?, (px.get(0)?.as_u64()? as u32, px.get(1)?.as_u64()? as u32), scale))
         }).collect();
         let mut made: Vec<(usize, platform::vdisplay::Virtual)> = Vec::new();
         let mut last_err = None;
         for (k, w) in wanted.iter().enumerate() {
-            let Some((_, px, hidpi)) = w else { continue };
-            match platform::vdisplay::create(&format!("Kast · {viewer}"), *px, *hidpi) {
+            let Some((_, px, scale)) = w else { continue };
+            match platform::vdisplay::create(&format!("Kast · {viewer}"), *px, *scale) {
                 Ok(v) => made.push((k, v)),
                 Err(e) => { store::log(&format!("pantalla virtual {}×{} para {viewer}: {e}", px.0, px.1)); last_err = Some(e); }
             }
@@ -1115,8 +1117,10 @@ impl Agent {
         let others: Vec<Rect> = ids.iter().zip(&bounds).filter(|(id, _)| !virt_ids.contains(id) && !fixed.iter().any(|f| f.0 == **id))
             .map(|(_, b)| *b).collect();
         let virt_in: Vec<(Rect, (f64, f64))> = made.iter().map(|(k, v)| {
-            let (local, px, hidpi) = wanted[*k].unwrap();
-            let size = at(v.id).map(|b| (b.w, b.h)).unwrap_or(if hidpi { (px.0 as f64 / 2.0, px.1 as f64 / 2.0) } else { (px.0 as f64, px.1 as f64) });
+            let (local, px, scale) = wanted[*k].unwrap();
+            // En un Mac, el escritorio va en puntos (Retina: la mitad de los píxeles); en Windows, en píxeles.
+            let d = if cfg!(target_os = "macos") && scale >= 1.5 { 2.0 } else { 1.0 };
+            let size = at(v.id).map(|b| (b.w, b.h)).unwrap_or((px.0 as f64 / d, px.1 as f64 / d));
             (local, size)
         }).collect();
         let origins = virt::place(&pairs, &virt_in, &others);
@@ -1391,7 +1395,7 @@ fn layout_plan(screen: &Screen, more: &[Screen]) -> Value {
         .filter_map(|s| s.local(&mons).map(|(at, _, _)| json!({"monitor": s.monitor, "at": at.json()})))
         .collect();
     let virt: Vec<Value> = more.iter().filter(|s| s.virt).map(|s| match s.local(&mons) {
-        Some((at, px, scale)) => json!({"at": at.json(), "px": [px.0, px.1], "hidpi": scale >= 1.5}),
+        Some((at, px, scale)) => json!({"at": at.json(), "px": [px.0, px.1], "scale": scale, "hidpi": scale >= 1.5}),
         None => Value::Null,
     }).collect();
     json!({"fixed": fixed, "virtual": virt})

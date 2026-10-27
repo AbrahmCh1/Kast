@@ -8,7 +8,7 @@
 //!   kast-link play <archivo> [--dump imagen.bmp]                   decodificar un flujo grabado (pruebas)
 //!   kast-link probe <ip:puerto> [--home dir] [--secs 10] [--text t] [--clip t] [--password p | --pair código]
 //!                                                   cliente de iOS desde la terminal (pruebas)
-//!   kast-link vdisplay <ancho> <alto> [--hidpi 1] [--at x,y] [--secs 5]   crear un momento una pantalla virtual (pruebas)
+//!   kast-link vdisplay <ancho> <alto> [--scale 200] [--at x,y] [--secs 5]   crear un momento una pantalla virtual (pruebas)
 use kast_link::{Res, agent, mobile, platform, store, stream};
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
@@ -88,10 +88,11 @@ fn run() -> Res<()> {
 // ---------------------------------------------------------------- pruebas: pantalla virtual
 
 fn print_displays() {
-    let px = platform::displays().unwrap_or_default();
+    let (px, mons) = (platform::displays().unwrap_or_default(), platform::local_monitors());
     for (i, (id, b)) in platform::display_ids().into_iter().zip(platform::display_bounds()).enumerate() {
         let (w, h) = px.get(i).map(|d| (d.w, d.h)).unwrap_or_default();
-        println!("  {}  id {id}  en {},{}  {}x{} (escritorio)  {w}x{h} píxeles", i + 1, b.x, b.y, b.w, b.h);
+        let scale = mons.get(i).map_or(1.0, |m| m.scale);
+        println!("  {}  id {id}  en {},{}  {}x{} (escritorio)  {w}x{h} píxeles  escala {}%", i + 1, b.x, b.y, b.w, b.h, (scale * 100.0).round());
     }
 }
 
@@ -109,7 +110,7 @@ fn vdisplay(o: &Opts) -> Res<()> {
     let h: u32 = o.pos.get(2).and_then(|v| v.parse().ok()).ok_or("falta el alto")?;
     println!("antes:");
     print_displays();
-    let v = platform::vdisplay::create("Kast (prueba)", (w, h), o.num(&["--hidpi"], 0) == 1)?;
+    let v = platform::vdisplay::create("Kast (prueba)", (w, h), o.num(&["--scale"], 100.0) / 100.0)?;
     if let Some((x, y)) = o.get(&["--at"]).and_then(|s| s.split_once(',')) {
         pump(Duration::from_millis(500));
         platform::vdisplay::arrange(&[(v.id, x.trim().parse()?, y.trim().parse()?)])?;
