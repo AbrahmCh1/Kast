@@ -5,6 +5,7 @@
 
 A (puerto 47800) y B (47810, otra identidad) se descubren; A pide ver la pantalla 1 de B, B comprueba el
 código y acepta con control, A recibe vídeo en vivo; después se desconecta y una segunda petición se rechaza.
+Siguen el acceso (recordar, contraseña, emparejamiento), varias pantallas, archivos y pantallas virtuales.
 """
 import json, os, queue, subprocess, sys, tempfile, threading, time
 
@@ -305,6 +306,35 @@ try:
     else:
         print("15) sacar archivos arrastrando: omitido (B no permite el control en este equipo)")
     hang_up(s)
+
+    # Pantallas virtuales: A pide la pantalla 1 de B en un monitor y una virtual nueva en el monitor de su derecha. En un
+    # Mac, B la crea con ese tamaño, A abre las dos con una sola aprobación y al desconectar B la quita; si B no puede
+    # crearla (Windows), A recibe el motivo y ve sólo la 1.
+    nb = len(B.settled(lambda m: True)["me"]["displays"])
+    A.send(cmd="connect", id=me_b["id"], control=False, screens=[
+        {"monitor": 1, "show_on": 9, "at": [0, 0, 1920, 1080]},
+        {"virtual": True, "show_on": 9, "at": [1920, 0, 1280, 720], "px": [1280, 720], "scale": 1}])
+    req9 = B.wait(lambda m: m.get("ev") == "request")
+    assert req9.get("virt") == 1 and req9["monitors"] == [1], req9
+    B.send(cmd="answer", req=req9["req"], accept=True, remember=False, control=False)
+    lives = lambda m: [x for x in m["sessions"] if x["dir"] == "in" and x["state"] == "live"]
+    got = A.wait(lambda m: (m.get("ev") == "toast" and m.get("err") and "virtual" in m["msg"]) or (m.get("ev") == "state" and len(lives(m)) == 2), 40)
+    if got.get("ev") == "state":
+        assert sum(1 for x in lives(got) if x["virt"]) == 1, got["sessions"]
+        mb = B.settled(lambda m: len(m["me"]["displays"]) == nb + 1)["me"]
+        assert [1280, 720] in mb["displays"], mb["displays"]
+        assert any(x["virt"] for x in B.settled(lambda m: len(m["sessions"]) == 2)["sessions"])
+        for x in lives(got):
+            A.send(cmd="disconnect", session=x["session"])
+        A.settled(lambda m: not m["sessions"])
+        B.settled(lambda m: not m["sessions"])
+        B.settled(lambda m: len(m["me"]["displays"]) == nb)
+        print(f"16) pantalla virtual de 1280×720 creada en B, vista junto a su pantalla 1 y quitada al desconectar")
+    else:
+        if me_b.get("vd"):
+            print(f"::warning::B (macOS) no pudo crear la pantalla virtual en este equipo: {got['msg']}")
+        hang_up(live_session())
+        print(f"16) pantallas virtuales: A ve sólo la pantalla 1 y recibe «{got['msg']}»")
     print("OK")
 finally:
     for a in (A, B):

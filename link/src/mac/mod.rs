@@ -2,7 +2,8 @@
 //! ScreenCaptureKit entrega NV12 en memoria de la GPU (IOSurface) que pasa directo al codificador:
 //! no hay conversión de color en CPU. VideoToolbox usa AVCC; se convierte a/desde Annex B (h264.rs).
 use crate::h264::{self, NAL_PPS, NAL_SPS};
-use crate::{DisplayInfo, Encoded, Res, now_us};
+use crate::virt::Rect;
+use crate::{DisplayInfo, Encoded, LocalMon, Res, now_us};
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
@@ -26,6 +27,7 @@ use std::time::Duration;
 
 pub mod clipboard;
 mod input;
+pub mod vdisplay;
 pub use input::{Injector, input_allowed, request_input};
 
 pub fn init() {}
@@ -63,6 +65,7 @@ fn active_displays() -> Vec<CGDirectDisplayID> {
 
 /// Tamaño en píxeles reales (no puntos) del modo actual.
 fn pixel_size(id: CGDirectDisplayID) -> (u32, u32) {
+    if let Some(px) = vdisplay::pixels(id) { return px; }
     let mode = CGDisplayCopyDisplayMode(id);
     let w = CGDisplayMode::pixel_width(mode.as_deref());
     let h = CGDisplayMode::pixel_height(mode.as_deref());
@@ -78,6 +81,23 @@ pub fn displays() -> Res<Vec<DisplayInfo>> {
             DisplayInfo { name: format!("ID {id}"), x: b.origin.x as i32, y: b.origin.y as i32, w, h }
         })
         .collect())
+}
+
+/// Ids de los monitores, en el orden de Kast.
+pub fn display_ids() -> Vec<u32> { active_displays() }
+
+/// Rectángulo de cada monitor en el escritorio, en puntos (las unidades en que se mueve el ratón).
+pub fn display_bounds() -> Vec<Rect> {
+    active_displays().into_iter().map(|id| { let b = CGDisplayBounds(id); Rect::new(b.origin.x, b.origin.y, b.size.width, b.size.height) }).collect()
+}
+
+/// Mis monitores como destino de pantallas remotas (en puntos, con su escala Retina).
+pub fn local_monitors() -> Vec<LocalMon> {
+    active_displays().into_iter().map(|id| {
+        let b = CGDisplayBounds(id);
+        let px = pixel_size(id);
+        LocalMon { rect: Rect::new(b.origin.x, b.origin.y, b.size.width, b.size.height), px, scale: px.0 as f64 / b.size.width.max(1.0) }
+    }).collect()
 }
 
 fn ns_error(e: *mut NSError) -> String {
@@ -228,9 +248,14 @@ impl Source {
         let scale = (3840.0 / pw as f64).min(1.0);
         let (w, h) = (((pw as f64 * scale) as u32) & !1, ((ph as f64 * scale) as u32) & !1);
 
-        let content = shareable_content()?;
-        let displays = unsafe { content.displays() };
-        let display = displays.iter().find(|d| unsafe { d.displayID() } == id).ok_or("ScreenCaptureKit no encuentra el monitor")?;
+        // Una pantalla recién creada (virtual) tarda un momento en aparecer en ScreenCaptureKit.
+        let t = std::time::Instant::now();
+        let display = loop {
+            let content = shareable_content()?;
+            if let Some(d) = unsafe { content.displays() }.iter().find(|d| unsafe { d.displayID() } == id) { break d; }
+            if t.elapsed() > Duration::from_secs(3) { return Err("ScreenCaptureKit no encuentra el monitor".into()); }
+            std::thread::sleep(Duration::from_millis(200));
+        };
 
         // Codificador H.264 en tiempo real, sin fotogramas B, perfil Baseline.
         let (tx, rx) = channel();

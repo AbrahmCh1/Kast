@@ -15,7 +15,9 @@
 //!   {"cmd":"drag_query","session":5}                  como sacar el ratón del visor con el botón pulsado (pruebas)
 //!   connect admite "screens":[{"monitor":1,"show_on":0},…] para ver varias pantallas del equipo a la vez (una sola
 //!   aprobación), y "auth":"password"|"pair" y "secret": contraseña de acceso desatendido o código de emparejamiento;
-//!   "id" también puede ser el ID de 9 dígitos de un equipo de la red
+//!   "id" también puede ser el ID de 9 dígitos de un equipo de la red. Una pantalla {"virtual":true,"show_on":n} pide
+//!   al equipo una pantalla virtual nueva del tamaño de mi monitor n, colocada junto a las suyas como están mis
+//!   monitores (ver virt.rs); "at":[x,y,w,h], "px":[w,h] y "scale" sustituyen a los de mi monitor (pruebas)
 //!   {"cmd":"access_set","unknown":"ask"|"reject","unattended":false,"password":"…","unattended_control":true}
 //!   {"cmd":"pair_start","control":true} · {"cmd":"pair_cancel"}   código de emparejamiento de un solo uso
 //!   {"cmd":"revoke","key":"…"}                         quitar el acceso a un dispositivo
@@ -27,7 +29,8 @@
 use crate::discovery::{self, Beacon, Packet};
 use crate::net::{self, Identity, Secure, id_of, msg};
 use crate::store::{self, Saved};
-use crate::{Res, access, input, platform, share, stream, viewer};
+use crate::virt::{self, Rect};
+use crate::{LocalMon, Res, access, input, platform, share, stream, viewer};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -52,6 +55,46 @@ struct Dev {
     seen: Option<Instant>,
     displays: Vec<(u32, u32)>,
     sharing: bool,
+    /// Puede crear pantallas virtuales.
+    vd: bool,
+}
+
+/// Pantalla que se quiere ver: una suya (`monitor`) o una virtual nueva (`virt`), y dónde mostrarla.
+#[derive(Clone)]
+struct Screen {
+    monitor: usize,
+    show_on: usize,
+    virt: bool,
+    /// Pruebas: rectángulo, píxeles y escala del monitor local (si no, los de mi monitor `show_on`).
+    at: Option<Rect>,
+    px: Option<(u32, u32)>,
+    scale: Option<f64>,
+}
+
+impl Screen {
+    fn real(monitor: usize, show_on: usize) -> Self { Self { monitor, show_on, virt: false, at: None, px: None, scale: None } }
+
+    fn parse(x: &Value) -> Self {
+        let virt = x.get("virtual").and_then(Value::as_bool).unwrap_or(false);
+        Self {
+            monitor: if virt { 0 } else { x.get("monitor").and_then(Value::as_u64).unwrap_or(1).max(1) as usize },
+            show_on: x.get("show_on").and_then(Value::as_u64).unwrap_or(0) as usize,
+            virt,
+            at: x.get("at").and_then(Rect::from_json),
+            px: x.get("px").and_then(|p| Some((p.get(0)?.as_u64()? as u32, p.get(1)?.as_u64()? as u32))),
+            scale: x.get("scale").and_then(Value::as_f64),
+        }
+    }
+
+    fn json(&self) -> Value { json!({"monitor": self.monitor, "show_on": self.show_on, "virtual": self.virt}) }
+
+    /// Mi monitor donde se verá: rectángulo en mi escritorio, píxeles reales y escala.
+    fn local(&self, mons: &[LocalMon]) -> Option<(Rect, (u32, u32), f64)> {
+        let m = self.show_on.checked_sub(1).and_then(|i| mons.get(i));
+        let at = self.at.or(m.map(|m| m.rect))?;
+        let px = self.px.or(m.map(|m| m.px)).unwrap_or((at.w as u32, at.h as u32));
+        Some((at, px, self.scale.or(m.map(|m| m.scale)).unwrap_or(1.0)))
+    }
 }
 
 struct Req {
@@ -64,6 +107,8 @@ struct Req {
     monitors: Vec<usize>,
     /// Pide también controlar teclado y ratón.
     control: bool,
+    /// Pantallas virtuales que pide crear.
+    virt: usize,
     answer: Sender<Answer>,
 }
 
@@ -75,6 +120,45 @@ struct Grant {
     control: bool,
     via: &'static str,
     live: usize,
+    /// Pantallas virtuales creadas para este visor: cada una se quita al cerrarse su sesión, y todas al acabar el grupo.
+    virt: Vec<VEntry>,
+}
+
+struct VEntry {
+    v: platform::vdisplay::Virtual,
+    /// Sesiones que la están transmitiendo, y si alguna llegó a abrirse.
+    streams: usize,
+    used: bool,
+}
+
+/// Una sesión dentro de un grupo: al terminar, por donde sea, se descuenta. Si mostraba una pantalla virtual, la
+/// pantalla se quita (macOS lleva sus ventanas a las demás); si era la última del grupo, se quitan todas.
+struct GrantUse {
+    a: Arc<Agent>,
+    k: (String, String),
+    virt_id: Option<u32>,
+}
+
+impl Drop for GrantUse {
+    fn drop(&mut self) {
+        let mut gone = false;
+        {
+            let mut st = self.a.st.lock().unwrap();
+            if let Some(gr) = st.grants.get_mut(&self.k) {
+                gr.live = gr.live.saturating_sub(1);
+                if let Some(e) = gr.virt.iter_mut().find(|e| Some(e.v.id) == self.virt_id) { e.streams = e.streams.saturating_sub(1); }
+                let n = gr.virt.len();
+                gr.virt.retain(|e| !e.used || e.streams > 0);
+                gone |= gr.virt.len() != n;
+            }
+            st.grants.retain(|_, gr| { gone |= !gr.valid() && !gr.virt.is_empty(); gr.valid() });
+        }
+        if gone {
+            // El sistema la quita un instante después: entonces se anuncian mis pantallas.
+            let a = self.a.clone();
+            std::thread::spawn(move || { std::thread::sleep(Duration::from_millis(1500)); a.displays_changed(); });
+        }
+    }
 }
 
 impl Grant {
@@ -100,6 +184,8 @@ struct Sess {
     stopped: bool,
     /// Con control de teclado y ratón.
     control: bool,
+    /// Es una pantalla virtual creada para esta conexión.
+    virt: bool,
     /// "in": dispositivo (id), monitor local (0 = ventana) y si se pidió control, para las disposiciones.
     dev: String,
     show_on: usize,
@@ -114,13 +200,14 @@ struct Sess {
     peer_key: String,
 }
 
-/// Sesión guardada con una disposición: id, nombre, su pantalla, mi monitor y control.
+/// Sesión guardada con una disposición: id, nombre, su pantalla (o una virtual), mi monitor y control.
 struct LayoutSess {
     dev: String,
     name: String,
     monitor: usize,
     show_on: usize,
     control: bool,
+    virt: bool,
 }
 
 #[derive(Default)]
@@ -171,7 +258,8 @@ impl Agent {
 
     fn beacon(&self) -> Beacon {
         Beacon { id: self.id.clone(), name: self.name.clone(), platform: store::platform().into(), port: self.port,
-                 displays: self.displays.lock().unwrap().clone(), sharing: self.sharing.load(Ordering::Relaxed) }
+                 displays: self.displays.lock().unwrap().clone(), sharing: self.sharing.load(Ordering::Relaxed),
+                 vd: platform::vdisplay::supported() }
     }
 
     fn emit_state(&self) {
@@ -191,6 +279,7 @@ impl Agent {
                 "known": saved.map(|s| !s.key.is_empty()).unwrap_or(false),
                 "manual": saved.map(|s| s.manual).unwrap_or(false),
                 "sharing": d.sharing,
+                "vd": d.vd,
                 "short_id": net::short_id(id),
                 "displays": d.displays.iter().map(|(w, h)| json!([w, h])).collect::<Vec<_>>(),
             })
@@ -202,8 +291,8 @@ impl Agent {
                             "trusted": false, "known": false, "manual": true, "sharing": true, "displays": []}))
             .collect();
         let requests: Vec<Value> = st.requests.iter().map(|r| json!({"req": r.req, "name": r.name, "platform": r.platform, "code": r.code, "monitor": r.monitor,
-                                                                   "monitors": r.monitors, "control": r.control})).collect();
-        let sessions: Vec<Value> = st.sessions.iter().map(|s| json!({"session": s.session, "dir": s.dir, "peer": s.peer, "monitor": s.monitor, "state": s.state, "code": s.code, "control": s.control, "show_on": s.show_on, "via": s.via})).collect();
+                                                                   "monitors": r.monitors, "control": r.control, "virt": r.virt})).collect();
+        let sessions: Vec<Value> = st.sessions.iter().map(|s| json!({"session": s.session, "dir": s.dir, "peer": s.peer, "monitor": s.monitor, "state": s.state, "code": s.code, "control": s.control, "show_on": s.show_on, "via": s.via, "virt": s.virt})).collect();
         // Dispositivos con acceso a este equipo (emparejados o recordados).
         let trusted: Vec<Value> = st.saved.iter().filter(|s| s.trusted && !s.key.is_empty())
             .map(|s| json!({"key": s.key, "name": s.name, "platform": s.platform, "control": s.control, "last_seen": s.last_seen,
@@ -213,6 +302,7 @@ impl Agent {
         let pairing = st.pairing.as_ref().filter(|p| !p.expired()).map(|p| json!({"code": p.code, "control": p.control, "secs": p.secs_left()}));
         let me = json!({"id": self.id, "short_id": net::short_id(&self.id), "name": self.name, "platform": store::platform(), "port": self.port,
                         "sharing": self.sharing.load(Ordering::Relaxed), "capture": platform::capture_allowed(), "input": platform::input_allowed(),
+                        "vd": platform::vdisplay::supported(),
                         "displays": self.displays.lock().unwrap().iter().map(|(w, h)| json!([w, h])).collect::<Vec<_>>()});
         drop(st);
         let all: Vec<Value> = devices.into_iter().chain(pending).collect();
@@ -244,15 +334,19 @@ impl Agent {
                         None => return self.toast(format!("No encuentro el equipo con ID {} en tu red (¿tiene Kast abierto?)", net::short_id_fmt(&digits)), true),
                     }
                 }
-                // Varias pantallas: la primera pide permiso (por todas) y las demás se abren al aceptarse.
-                let mut screens: Vec<(usize, usize)> = v.get("screens").and_then(Value::as_array).into_iter().flatten()
-                    .map(|x| (x["monitor"].as_u64().unwrap_or(1).max(1) as usize, x["show_on"].as_u64().unwrap_or(0) as usize))
-                    .take(16).collect();
-                screens.dedup_by_key(|x| x.0);
-                if screens.is_empty() { screens.push((monitor, show_on)); }
-                let (monitor, show_on) = screens.remove(0);
+                // Varias pantallas: la primera pide permiso (por todas) y las demás se abren al aceptarse. Las reales
+                // van primero: las virtuales se crean al aceptar y se colocan junto a ellas.
+                let mut screens: Vec<Screen> = v.get("screens").and_then(Value::as_array).into_iter().flatten().map(Screen::parse).take(16).collect();
+                let mut seen = std::collections::HashSet::new();
+                screens.retain(|x| x.virt || seen.insert(x.monitor));
+                if screens.is_empty() { screens.push(Screen::real(monitor, show_on)); }
+                screens.sort_by_key(|x| x.virt);
+                if screens[0].virt {
+                    return self.toast("Para añadir pantallas virtuales, elige también una de sus pantallas reales: se colocan junto a ella", true);
+                }
+                let first = screens.remove(0);
                 let a = self.clone();
-                std::thread::spawn(move || a.connect(&id, monitor, show_on, control, auth, screens));
+                std::thread::spawn(move || a.connect(&id, first, control, auth, screens));
             }
             "access_set" => self.access_set(&v),
             "pair_start" => {
@@ -362,7 +456,8 @@ impl Agent {
     fn layout_save(&self, path: &str) {
         let st = self.st.lock().unwrap();
         let body: String = st.sessions.iter().filter(|s| s.dir == "in" && s.show_on > 0 && !s.stopped)
-            .map(|s| format!("{}\t{}\t{}\t{}\t{}\n", s.dev, s.peer.replace(['\t', '\n', '\r'], " "), s.monitor, s.show_on, s.want_control as u8))
+            .map(|s| format!("{}\t{}\t{}\t{}\t{}\t{}\n", s.dev, s.peer.replace(['\t', '\n', '\r'], " "), if s.virt { 0 } else { s.monitor }, s.show_on,
+                             s.want_control as u8, if s.virt { "virtual" } else { "" }))
             .collect();
         drop(st);
         if let Err(e) = std::fs::write(path, body) { store::log(&format!("disposición {path}: {e}")); }
@@ -377,30 +472,47 @@ impl Agent {
             let f: Vec<&str> = l.split('\t').collect();
             (f.len() >= 5).then(|| LayoutSess {
                 dev: f[0].into(), name: f[1].into(), monitor: f[2].parse().unwrap_or(1), show_on: f[3].parse().unwrap_or(0), control: f[4] == "1",
+                virt: f.get(5) == Some(&"virtual"),
             })
         }).filter(|w| !w.dev.is_empty() && w.show_on > 0).collect();
         // Que Windows termine de aplicar la nueva disposición de pantallas antes de colocar ventanas.
         std::thread::sleep(Duration::from_millis(800));
-        let same = |s: &Sess, w: &LayoutSess| s.dev == w.dev && s.monitor == w.monitor && s.show_on == w.show_on;
+        let same = |s: &Sess, w: &LayoutSess| s.dev == w.dev && s.show_on == w.show_on && s.virt == w.virt && (w.virt || s.monitor == w.monitor);
         let (keep, stop, missing) = {
             let st = self.st.lock().unwrap();
             let live: Vec<&Sess> = st.sessions.iter().filter(|s| s.dir == "in" && !s.stopped).collect();
-            let keep: Vec<(u64, usize)> = live.iter().filter(|s| want.iter().any(|w| same(s, w))).map(|s| (s.session, s.show_on)).collect();
-            let stop: Vec<u64> = live.iter().filter(|s| s.show_on > 0 && !want.iter().any(|w| same(s, w))).map(|s| s.session).collect();
             let missing: Vec<&LayoutSess> = want.iter().filter(|w| !live.iter().any(|s| same(s, w))).collect();
-            (keep, stop, missing.into_iter().map(|w| LayoutSess { dev: w.dev.clone(), name: w.name.clone(), ..*w }).collect::<Vec<_>>())
+            // Si falta una virtual de un equipo, se vuelven a abrir todas sus pantallas: las virtuales se crean y se
+            // colocan junto a las reales al conectar.
+            let redo: Vec<&str> = missing.iter().filter(|w| w.virt).map(|w| w.dev.as_str()).collect();
+            let keep: Vec<(u64, usize)> = live.iter().filter(|s| !redo.contains(&s.dev.as_str()) && want.iter().any(|w| same(s, w)))
+                .map(|s| (s.session, s.show_on)).collect();
+            let stop: Vec<u64> = live.iter().filter(|s| s.show_on > 0 && !keep.iter().any(|k| k.0 == s.session)).map(|s| s.session).collect();
+            let missing: Vec<LayoutSess> = want.iter().filter(|w| redo.contains(&w.dev.as_str()) || !live.iter().any(|s| same(s, w)))
+                .map(|w| LayoutSess { dev: w.dev.clone(), name: w.name.clone(), ..*w }).collect();
+            (keep, stop, missing)
         };
         for s in stop { self.stop_session(s); }
         for (session, monitor) in keep { let _ = self.proxy.send_event(viewer::Event::Place { session, monitor }); }
-        for w in missing {
-            let a = self.clone();
+        // Las que faltan, por equipo: una sola conexión pide todas sus pantallas (y crea las virtuales).
+        let mut devs: Vec<&str> = missing.iter().map(|w| w.dev.as_str()).collect();
+        devs.sort_unstable();
+        devs.dedup();
+        for dev in devs {
+            let mut ws: Vec<&LayoutSess> = missing.iter().filter(|w| w.dev == dev).collect();
+            ws.sort_by_key(|w| w.virt);
+            let mut screens: Vec<Screen> = ws.iter().map(|w| Screen { virt: w.virt, ..Screen::real(w.monitor.max(1), w.show_on) }).collect();
+            let (name, show_on, control) = (ws[0].name.clone(), ws[0].show_on, ws[0].control);
+            if screens[0].virt { self.toast(format!("{name}: la disposición sólo tiene pantallas virtuales; falta una de sus pantallas reales"), true); continue; }
+            let first = screens.remove(0);
+            let (a, dev) = (self.clone(), dev.to_string());
             std::thread::spawn(move || {
                 // Recién arrancado (o con la red cambiando), el dispositivo puede tardar en anunciarse.
-                if !a.wait_online(&w.dev, Duration::from_secs(20)) {
-                    a.toast(format!("{} no está en la red: no se pudo abrir su pantalla en tu monitor {}", w.name, w.show_on), true);
+                if !a.wait_online(&dev, Duration::from_secs(20)) {
+                    a.toast(format!("{name} no está en la red: no se pudo abrir su pantalla en tu monitor {show_on}"), true);
                     return;
                 }
-                a.connect(&w.dev, w.monitor, w.show_on, w.control, None, Vec::new());
+                a.connect(&dev, first, control, None, screens);
             });
         }
     }
@@ -448,8 +560,8 @@ impl Agent {
 
     // ------------------------------------------------------------ yo veo a otro
 
-    /// `more`: otras pantallas (monitor, dónde mostrarla) que se abren en cuanto el equipo acepte la primera.
-    fn connect(self: &Arc<Self>, id: &str, monitor: usize, show_on: usize, control: bool, auth: Option<(String, String)>, more: Vec<(usize, usize)>) {
+    /// `more`: otras pantallas que se abren en cuanto el equipo acepte la primera (las virtuales las crea al aceptar).
+    fn connect(self: &Arc<Self>, id: &str, screen: Screen, control: bool, auth: Option<(String, String)>, more: Vec<Screen>) {
         let (addrs, name) = {
             let st = self.st.lock().unwrap();
             if let Some(a) = id.strip_prefix("ip:") {
@@ -467,11 +579,11 @@ impl Agent {
         };
         if addrs.is_empty() { self.toast(format!("{name} no está disponible"), true); return }
         let session = self.id();
-        self.st.lock().unwrap().sessions.push(Sess { session, dir: "in", peer: name.clone(), monitor, state: "connecting", code: String::new(), sock: None,
-                                                     stopped: false, control, dev: id.to_string(), show_on, want_control: control, files: None, input: None,
-                                                     via: "", peer_key: String::new() });
+        self.st.lock().unwrap().sessions.push(Sess { session, dir: "in", peer: name.clone(), monitor: screen.monitor, state: "connecting", code: String::new(),
+                                                     sock: None, stopped: false, control, virt: screen.virt, dev: id.to_string(), show_on: screen.show_on,
+                                                     want_control: control, files: None, input: None, via: "", peer_key: String::new() });
         self.emit_state();
-        let r = self.view(session, id, &addrs, &name, monitor, show_on, control, auth.as_ref(), &more);
+        let r = self.view(session, id, &addrs, &name, &screen, control, auth.as_ref(), &more);
         let _ = self.proxy.send_event(viewer::Event::Close(session));
         self.end_session(session);
         match r {
@@ -481,8 +593,9 @@ impl Agent {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn view(self: &Arc<Self>, session: u64, id: &str, addrs: &[SocketAddr], name: &str, monitor: usize, show_on: usize, control: bool,
-            auth: Option<&(String, String)>, more: &[(usize, usize)]) -> Res<()> {
+    fn view(self: &Arc<Self>, session: u64, id: &str, addrs: &[SocketAddr], name: &str, screen: &Screen, control: bool,
+            auth: Option<&(String, String)>, more: &[Screen]) -> Res<()> {
+        let (mut monitor, show_on) = (screen.monitor, screen.show_on);
         // La dirección conocida primero; si no responde, las demás desde las que se anunció.
         let (stream, addr) = addrs.iter().enumerate()
             .find_map(|(i, a)| TcpStream::connect_timeout(a, Duration::from_secs(if i == 0 { 4 } else { 2 })).ok().map(|s| (s, *a)))
@@ -501,9 +614,11 @@ impl Agent {
         // Grupo de este dispositivo: las demás pantallas (ahora o más tarde) entran con el mismo permiso.
         let group = self.st.lock().unwrap().groups.entry(id.to_string())
             .or_insert_with(|| { let mut b = [0u8; 12]; let _ = getrandom::fill(&mut b); net::hex(&b) }).clone();
-        let monitors: Vec<usize> = std::iter::once(monitor).chain(more.iter().map(|x| x.0)).collect();
+        let monitors: Vec<usize> = std::iter::once(monitor).chain(more.iter().filter(|x| !x.virt).map(|x| x.monitor)).collect();
+        let nvirt = more.iter().filter(|x| x.virt).count();
+        let layout = (nvirt > 0).then(|| layout_plan(screen, more));
         let req = json!({"name": self.name, "platform": store::platform(), "monitor": monitor, "monitors": monitors, "group": group,
-                         "control": control, "auth": auth.map(|(k, _)| k.as_str())}).to_string();
+                         "control": control, "auth": auth.map(|(k, _)| k.as_str()), "virt": nvirt, "layout": layout}).to_string();
         ch.send_typed(msg::REQUEST, req.as_bytes())?;
         let mut m = Vec::new();
         loop {
@@ -518,8 +633,7 @@ impl Agent {
                 Some(&msg::REJECT) => {
                     let (reason, need_auth) = access::reject_reason(&m[1..]);
                     if need_auth {
-                        let screens: Vec<Value> = std::iter::once((monitor, show_on)).chain(more.iter().copied())
-                            .map(|(m, s)| json!({"monitor": m, "show_on": s})).collect();
+                        let screens: Vec<Value> = std::iter::once(screen).chain(more).map(Screen::json).collect();
                         self.emit(json!({"t": "link", "ev": "need_auth", "id": id, "name": name, "monitor": monitor, "show_on": show_on,
                                          "screens": screens, "control": control, "failed": auth.is_some()}));
                     }
@@ -537,11 +651,31 @@ impl Agent {
             self.toast(format!("{name}: {note}"), true);
         }
         let control = control && granted.get("control").and_then(Value::as_bool).unwrap_or(false);
-        self.set_session(session, |s| s.control = control);
+        // Al crear las virtuales, el equipo pudo renumerar sus pantallas (se cuentan de izquierda a derecha).
+        if let Some(m) = granted.get("monitor").and_then(Value::as_u64).filter(|m| *m > 0) { monitor = m as usize; }
+        self.set_session(session, |s| { s.control = control; s.monitor = monitor; });
+        let remap: Vec<(usize, usize)> = granted.get("remap").and_then(Value::as_array).into_iter().flatten()
+            .filter_map(|r| Some((r.get(0)?.as_u64()? as usize, r.get(1)?.as_u64()? as usize))).collect();
+        let mut made = granted.get("virtual").and_then(Value::as_array).into_iter().flatten().map(|x| x.as_u64().map(|m| m as usize));
+        if nvirt > 0 {
+            let ok = granted.get("virtual").and_then(Value::as_array).map(|a| a.iter().filter(|x| x.is_u64()).count()).unwrap_or(0);
+            let why = granted.get("virtual_error").and_then(Value::as_str).map(str::to_string)
+                .or_else(|| granted.get("virtual").is_none().then(|| "su versión de Kast no lo permite".into()));
+            if ok < nvirt {
+                let what = if ok == 0 { "las pantallas virtuales".to_string() } else { format!("{} de {nvirt} pantallas virtuales", nvirt - ok) };
+                self.toast(format!("{name} no pudo crear {what}{}", why.map(|w| format!(": {w}")).unwrap_or_default()), true);
+            }
+        }
         // Aceptada: se abren las demás pantallas pedidas (entran con el permiso del grupo, sin volver a preguntar).
-        for &(m, show) in more {
+        for x in more {
+            let mut x = x.clone();
+            if x.virt {
+                match made.next().flatten() { Some(m) => x.monitor = m, None => continue }
+            } else if let Some(&(_, m)) = remap.iter().find(|r| r.0 == x.monitor) {
+                x.monitor = m;
+            }
             let (a, id) = (self.clone(), id.to_string());
-            std::thread::spawn(move || a.connect(&id, m, show, control, None, Vec::new()));
+            std::thread::spawn(move || a.connect(&id, x, control, None, Vec::new()));
         }
         // Recordar el dispositivo (su identidad, para detectar cambios).
         {
@@ -562,11 +696,14 @@ impl Agent {
         }
         let (w, h, fps) = stream::parse_hello(&m[1..]).ok_or("respuesta inesperada")?;
         let shared = Arc::new(Mutex::new(viewer::Shared { frame: vec![0; w * h], w, h, cursor: (0, 0, false) }));
+        let what = if screen.virt { "pantalla virtual".to_string() } else { format!("pantalla {monitor}") };
         let title = if control {
-            format!("Kast Link — {name} · pantalla {monitor} · control (Ctrl+Alt+Shift+F pantalla completa, Ctrl+Alt+Shift+Q salir)")
+            format!("Kast Link — {name} · {what} · control (Ctrl+Alt+Shift+F pantalla completa, Ctrl+Alt+Shift+Q salir)")
         } else {
-            format!("Kast Link — {name} · pantalla {monitor}")
+            format!("Kast Link — {name} · {what}")
         };
+        // Dónde está esa pantalla en el otro equipo: arrastrar de una ventana a otra del mismo equipo sigue allí.
+        let geo = granted.get("bounds").and_then(Rect::from_json).map(|bounds| viewer::Geo { group: id.to_string(), bounds });
         // Con control, la ventana envía teclado y ratón por un hilo propio (no bloquea la ventana), el
         // portapapeles se comparte y se pueden arrastrar archivos a la ventana.
         let (input, files, clip) = if control {
@@ -580,7 +717,7 @@ impl Agent {
             (None, None, None)
         };
         self.set_session(session, |s| { s.files = files.clone(); s.input = input.clone(); });
-        let _ = self.proxy.send_event(viewer::Event::Open { session, shared: shared.clone(), monitor: (show_on > 0).then_some(show_on), title, input, files });
+        let _ = self.proxy.send_event(viewer::Event::Open { session, shared: shared.clone(), monitor: (show_on > 0).then_some(show_on), title, input, files, geo });
         self.set_session(session, |s| s.state = "live");
         let proxy = self.proxy.clone();
         let mut drag = DragIn { a: self.clone(), session, peer: name.to_string(), recv: None, done: None };
@@ -684,10 +821,13 @@ impl Agent {
         let v: Value = serde_json::from_slice(&m[1..]).unwrap_or(Value::Null);
         let name: String = v.get("name").and_then(Value::as_str).unwrap_or("Dispositivo").chars().take(64).collect();
         let plat: String = v.get("platform").and_then(Value::as_str).unwrap_or("").chars().take(16).collect();
-        let monitor = v.get("monitor").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
+        let mut monitor = v.get("monitor").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
         let wants_control = v.get("control").and_then(Value::as_bool).unwrap_or(false);
         let auth = v.get("auth").and_then(Value::as_str).unwrap_or("").to_string();
         let group = v.get("group").and_then(Value::as_str).filter(|g| !g.is_empty() && g.len() <= 64).map(str::to_string);
+        // Pantallas virtuales que pide (sólo dentro de un grupo, que es quien las mantiene vivas).
+        let plan = v.get("layout").filter(|l| group.is_some() && l.get("virtual").and_then(Value::as_array).is_some_and(|a| !a.is_empty())).cloned();
+        let nvirt = plan.as_ref().and_then(|l| l["virtual"].as_array()).map(|a| a.len().min(4)).unwrap_or(0);
         let ndisp = self.displays.lock().unwrap().len().max(1);
         let mut monitors: Vec<usize> = v.get("monitors").and_then(Value::as_array).into_iter().flatten()
             .filter_map(Value::as_u64).map(|m| m as usize).filter(|m| (1..=ndisp).contains(m)).take(16).collect();
@@ -749,9 +889,9 @@ impl Agent {
             let (tx, rx) = channel();
             let code = ch.code.clone();
             self.st.lock().unwrap().requests.push(Req { req, name: name.clone(), platform: plat.clone(), code: code.clone(), monitor,
-                                                        monitors: monitors.clone(), control: wants_control, answer: tx });
+                                                        monitors: monitors.clone(), control: wants_control, virt: nvirt, answer: tx });
             self.emit(json!({"t": "link", "ev": "request", "req": req, "name": name, "platform": plat, "code": code, "monitor": monitor,
-                             "monitors": monitors, "control": wants_control}));
+                             "monitors": monitors, "control": wants_control, "virt": nvirt}));
             self.emit_state();
             let answer = rx.recv_timeout(Duration::from_secs(90));
             {
@@ -787,6 +927,33 @@ impl Agent {
             self.emit(json!({"t": "link", "ev": "show"}));
             false
         } else { true };
+        // Pantallas virtuales pedidas: se crean ahora, ya con permiso, colocadas como los monitores del visor. Al
+        // crearlas puede cambiar el número de las pantallas (se cuentan de izquierda a derecha).
+        let mut made = Vec::new();
+        let mut vinfo = json!({});
+        if let Some(plan) = &plan {
+            match self.make_virtual(plan, &name) {
+                Ok((list, remap, idx)) => {
+                    let new = |m: usize| remap.iter().find(|r| r.0 == m).map(|r| r.1).unwrap_or(m);
+                    monitor = new(monitor);
+                    monitors = monitors.iter().map(|m| new(*m)).chain(idx.iter().flatten().copied()).collect();
+                    store::log(&format!("{} pantalla{} virtual{} para {name}", list.len(), if list.len() == 1 { "" } else { "s" }, if list.len() == 1 { "" } else { "es" }));
+                    vinfo = json!({"remap": remap, "virtual": idx});
+                    made = list;
+                }
+                Err(e) => {
+                    store::log(&format!("pantallas virtuales para {name}: {e}"));
+                    vinfo = json!({"virtual_error": e.to_string()});
+                }
+            }
+        }
+        // ¿Es una de las pantallas virtuales creadas para este grupo?
+        let my_id = platform::display_ids().get(monitor - 1).copied();
+        let virt_id = group.as_ref().and_then(|g| {
+            let st = self.st.lock().unwrap();
+            let gr = st.grants.get(&(key.clone(), g.clone()))?;
+            gr.virt.iter().find(|e| Some(e.v.id) == my_id).map(|e| e.v.id)
+        });
         // La captura se prepara antes de confirmar: si falla, el otro equipo recibe el motivo.
         let src = match stream::open(monitor, FPS, MBPS, !control) {
             Ok(s) => s,
@@ -799,7 +966,22 @@ impl Agent {
         };
         // Con sus pantallas: el visor puede ofrecer cambiar de una a otra aunque haya entrado por ID o por IP.
         let displays: Vec<Value> = self.displays.lock().unwrap().iter().map(|(w, h)| json!([w, h])).collect();
-        ch.send_typed(msg::ACCEPT, json!({"control": control, "note": note, "displays": displays}).to_string().as_bytes())?;
+        let mut acc = json!({"control": control, "note": note, "displays": displays, "monitor": monitor,
+                             "bounds": platform::display_bounds().get(monitor - 1).map(Rect::json)});
+        if let (Some(a), Some(v)) = (acc.as_object_mut(), vinfo.as_object()) { a.extend(v.clone()); }
+        // Permiso del grupo: las demás pantallas pedidas entran sin preguntar mientras dure (ver Grant). Se apunta antes
+        // de confirmar, porque el visor abre las demás conexiones en cuanto recibe la confirmación.
+        let _grant = group.as_ref().map(|g| {
+            let mut st = self.st.lock().unwrap();
+            let gr = st.grants.entry((key.clone(), g.clone())).or_insert(Grant { monitors: Vec::new(), control, via, live: 0, virt: Vec::new() });
+            for m in &monitors { if !gr.monitors.contains(m) { gr.monitors.push(*m); } }
+            gr.control = control;
+            gr.live += 1;
+            gr.virt.extend(made.drain(..).map(|v| VEntry { v, streams: 0, used: false }));
+            if let Some(e) = gr.virt.iter_mut().find(|e| Some(e.v.id) == virt_id) { e.streams += 1; e.used = true; }
+            GrantUse { a: self.clone(), k: (key.clone(), g.clone()), virt_id }
+        });
+        ch.send_typed(msg::ACCEPT, acc.to_string().as_bytes())?;
         // Último acceso de los dispositivos con acceso (se ve en «Dispositivos con acceso»).
         {
             let mut st = self.st.lock().unwrap();
@@ -815,10 +997,10 @@ impl Agent {
         let sock = ch.shutdown_handle().ok();
         if let Some(s) = &sock { s.set_read_timeout(None)?; }
         self.st.lock().unwrap().sessions.push(Sess { session, dir: "out", peer: name.clone(), monitor, state: "live", code: ch.code.clone(), sock,
-                                                     stopped: false, control, dev: String::new(), show_on: 0, want_control: control, files: None, input: None,
-                                                     via, peer_key: key.clone() });
+                                                     stopped: false, control, virt: virt_id.is_some(), dev: String::new(), show_on: 0, want_control: control,
+                                                     files: None, input: None, via, peer_key: key.clone() });
         self.emit_state();
-        store::log(&format!("{name} empieza a {} la pantalla {monitor}", if control { "controlar" } else { "ver" }));
+        store::log(&format!("{name} empieza a {} la pantalla {monitor}{}", if control { "controlar" } else { "ver" }, if virt_id.is_some() { " (virtual)" } else { "" }));
         // El visor puede pedir un fotograma clave (p. ej. la app de iOS al abrir la sesión o si su decodificador falla).
         let keyframe = Arc::new(AtomicBool::new(false));
         // El hilo que recibe del visor avisa en cuanto la conexión se cierra (ver stream::serve).
@@ -895,23 +1077,75 @@ impl Agent {
             });
             None
         };
-        // Permiso del grupo: las demás pantallas pedidas entran sin preguntar mientras dure (ver Grant).
-        if let Some(g) = &group {
-            let mut st = self.st.lock().unwrap();
-            let gr = st.grants.entry((key.clone(), g.clone())).or_insert(Grant { monitors: Vec::new(), control, via, live: 0 });
-            for m in &monitors { if !gr.monitors.contains(m) { gr.monitors.push(*m); } }
-            gr.control = control;
-            gr.live += 1;
-        }
         let r = stream::serve(&mut ch, src, FPS, &keyframe, &closed);
-        if let Some(g) = &group {
-            let mut st = self.st.lock().unwrap();
-            if let Some(gr) = st.grants.get_mut(&(key.clone(), g.clone())) { gr.live = gr.live.saturating_sub(1); }
-            st.grants.retain(|_, gr| gr.valid());
-        }
         self.end_session(session);
         store::log(&format!("sesión con {name} terminada{}", r.err().map(|e| format!(": {e}")).unwrap_or_default()));
         Ok(())
+    }
+
+    /// Crea las pantallas virtuales del plan del visor y las coloca junto a mis pantallas como están sus monitores.
+    /// Devuelve las pantallas, cómo cambió la numeración de las que ya había (antes, después) y el número de cada
+    /// virtual (None si no se pudo crear).
+    #[allow(clippy::type_complexity)]
+    fn make_virtual(&self, plan: &Value, viewer: &str) -> Res<(Vec<platform::vdisplay::Virtual>, Vec<(usize, usize)>, Vec<Option<usize>>)> {
+        if !platform::vdisplay::supported() { return Err("de momento sólo se pueden crear en un Mac".into()); }
+        let ids_before = platform::display_ids();
+        let fixed: Vec<(u32, Rect)> = plan["fixed"].as_array().into_iter().flatten()
+            .filter_map(|f| Some((*ids_before.get((f.get("monitor")?.as_u64()? as usize).checked_sub(1)?)?, Rect::from_json(f.get("at")?)?)))
+            .collect();
+        let wanted: Vec<Option<(Rect, (u32, u32), bool)>> = plan["virtual"].as_array().into_iter().flatten().take(4).map(|x| {
+            let px = x.get("px")?;
+            Some((Rect::from_json(x.get("at")?)?, (px.get(0)?.as_u64()? as u32, px.get(1)?.as_u64()? as u32), x.get("hidpi")?.as_bool()?))
+        }).collect();
+        let mut made: Vec<(usize, platform::vdisplay::Virtual)> = Vec::new();
+        let mut last_err = None;
+        for (k, w) in wanted.iter().enumerate() {
+            let Some((_, px, hidpi)) = w else { continue };
+            match platform::vdisplay::create(&format!("Kast · {viewer}"), *px, *hidpi) {
+                Ok(v) => made.push((k, v)),
+                Err(e) => { store::log(&format!("pantalla virtual {}×{} para {viewer}: {e}", px.0, px.1)); last_err = Some(e); }
+            }
+        }
+        if made.is_empty() { return Err(last_err.unwrap_or_else(|| "faltan los datos de las pantallas virtuales".into())); }
+        // Dónde van: junto a mis pantallas que el visor verá en sus monitores, sin tapar las demás.
+        let (ids, bounds) = (platform::display_ids(), platform::display_bounds());
+        let at = |id: u32| ids.iter().position(|x| *x == id).and_then(|i| bounds.get(i).copied());
+        let virt_ids: Vec<u32> = made.iter().map(|(_, v)| v.id).collect();
+        let pairs: Vec<(Rect, Rect)> = fixed.iter().filter_map(|(id, local)| Some((*local, at(*id)?))).collect();
+        let others: Vec<Rect> = ids.iter().zip(&bounds).filter(|(id, _)| !virt_ids.contains(id) && !fixed.iter().any(|f| f.0 == **id))
+            .map(|(_, b)| *b).collect();
+        let virt_in: Vec<(Rect, (f64, f64))> = made.iter().map(|(k, v)| {
+            let (local, px, hidpi) = wanted[*k].unwrap();
+            let size = at(v.id).map(|b| (b.w, b.h)).unwrap_or(if hidpi { (px.0 as f64 / 2.0, px.1 as f64 / 2.0) } else { (px.0 as f64, px.1 as f64) });
+            (local, size)
+        }).collect();
+        let origins = virt::place(&pairs, &virt_in, &others);
+        let moves: Vec<(u32, i32, i32)> = made.iter().zip(&origins).map(|((_, v), &(x, y))| (v.id, x, y)).collect();
+        platform::vdisplay::arrange(&moves)?;
+        // Se aplica en un momento (el sistema puede ajustarlas un poco para que no queden huecos).
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_secs(2) {
+            let (ids, bounds) = (platform::display_ids(), platform::display_bounds());
+            let placed = moves.iter().all(|(id, x, y)| ids.iter().position(|i| i == id).and_then(|i| bounds.get(i))
+                .is_some_and(|b| b.x as i32 == *x && b.y as i32 == *y));
+            if placed { break; }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let ids_after = platform::display_ids();
+        let index = |id: u32| ids_after.iter().position(|x| *x == id).map(|i| i + 1);
+        let remap: Vec<(usize, usize)> = ids_before.iter().enumerate().filter_map(|(i, id)| Some((i + 1, index(*id)?))).collect();
+        let mut idx = vec![None; wanted.len()];
+        for (k, v) in &made { idx[*k] = index(v.id); }
+        self.displays_changed();
+        Ok((made.into_iter().map(|(_, v)| v).collect(), remap, idx))
+    }
+
+    /// Mis pantallas cambiaron (se crearon o quitaron virtuales): se anuncian ya, sin esperar a la siguiente vuelta.
+    fn displays_changed(&self) {
+        let d: Vec<(u32, u32)> = platform::displays().map(|v| v.iter().map(|d| (d.w, d.h)).collect()).unwrap_or_default();
+        *self.displays.lock().unwrap() = d;
+        self.announce();
+        self.emit_state();
     }
 
     /// Contraseña o código: reto ligado a esta conexión (access.rs). Devuelve si puede controlar.
@@ -1091,10 +1325,11 @@ impl Agent {
         alts.insert(0, here);
         alts.truncate(4);
         let fresh = match st.devices.get(&b.id) {
-            Some(d) => d.seen.is_none() || d.addr != Some(addr) || d.name != b.name || d.displays != b.displays || d.sharing != b.sharing,
+            Some(d) => d.seen.is_none() || d.addr != Some(addr) || d.name != b.name || d.displays != b.displays || d.sharing != b.sharing || d.vd != b.vd,
             None => true,
         };
-        st.devices.insert(b.id.clone(), Dev { name: b.name, platform: b.platform, addr: Some(addr), alts, seen: Some(Instant::now()), displays: b.displays, sharing: b.sharing });
+        st.devices.insert(b.id.clone(), Dev { name: b.name, platform: b.platform, addr: Some(addr), alts, seen: Some(Instant::now()), displays: b.displays,
+                                              sharing: b.sharing, vd: b.vd });
         drop(st);
         if fresh { self.emit_state(); }
     }
@@ -1112,7 +1347,8 @@ pub fn run(port: u16) -> Res<()> {
     let mut devices = HashMap::new();
     for s in &saved {
         if let Some(k) = net::unhex(&s.key) {
-            devices.insert(id_of(&k), Dev { name: s.name.clone(), platform: s.platform.clone(), addr: s.addr.parse().ok(), alts: vec![], seen: None, displays: vec![], sharing: true });
+            devices.insert(id_of(&k), Dev { name: s.name.clone(), platform: s.platform.clone(), addr: s.addr.parse().ok(), alts: vec![], seen: None, displays: vec![],
+                                            sharing: true, vd: false });
         }
     }
     let agent = Arc::new(Agent {
@@ -1145,6 +1381,20 @@ pub fn run(port: u16) -> Res<()> {
     let a = agent.clone();
     viewer::run(el, true, move |s| a.stop_session(s))?;
     Ok(())
+}
+
+/// Pantallas virtuales pedidas y dónde se verán, con mis monitores que mostrarán sus pantallas reales, para que el
+/// otro equipo las coloque como están mis monitores (ver virt.rs).
+fn layout_plan(screen: &Screen, more: &[Screen]) -> Value {
+    let mons = platform::local_monitors();
+    let fixed: Vec<Value> = std::iter::once(screen).chain(more).filter(|s| !s.virt)
+        .filter_map(|s| s.local(&mons).map(|(at, _, _)| json!({"monitor": s.monitor, "at": at.json()})))
+        .collect();
+    let virt: Vec<Value> = more.iter().filter(|s| s.virt).map(|s| match s.local(&mons) {
+        Some((at, px, scale)) => json!({"at": at.json(), "px": [px.0, px.1], "hidpi": scale >= 1.5}),
+        None => Value::Null,
+    }).collect();
+    json!({"fixed": fixed, "virtual": virt})
 }
 
 /// Evento de entrada en JSON (modo de pruebas KAST_LINK_TEST).

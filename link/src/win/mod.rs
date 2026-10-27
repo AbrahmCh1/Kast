@@ -6,10 +6,12 @@ pub mod syskeys;
 mod color;
 mod input;
 mod mf;
+pub mod vdisplay;
 
 pub use input::Injector;
 
-use crate::{DisplayInfo, Encoded, Res, now_us, pattern};
+use crate::virt::Rect;
+use crate::{DisplayInfo, Encoded, LocalMon, Res, now_us, pattern};
 use std::time::{Duration, Instant};
 
 pub fn init() {
@@ -48,6 +50,21 @@ pub fn displays() -> Res<Vec<DisplayInfo>> {
         .iter()
         .map(|o| DisplayInfo { name: o.name.trim_start_matches(r"\\.\").to_string(), x: o.x, y: o.y, w: o.w, h: o.h })
         .collect())
+}
+
+/// Ids de los monitores, en el orden de Kast (en Windows, su número).
+pub fn display_ids() -> Vec<u32> { (1..=capture::outputs().map(|o| o.len()).unwrap_or(0) as u32).collect() }
+
+/// Rectángulo de cada monitor en el escritorio virtual, en píxeles.
+pub fn display_bounds() -> Vec<Rect> {
+    capture::outputs().unwrap_or_default().iter().map(|o| Rect::new(o.x as f64, o.y as f64, o.w as f64, o.h as f64)).collect()
+}
+
+/// Mis monitores como destino de pantallas remotas (en píxeles, con su escala de Windows).
+pub fn local_monitors() -> Vec<LocalMon> {
+    capture::outputs().unwrap_or_default().iter()
+        .map(|o| LocalMon { rect: Rect::new(o.x as f64, o.y as f64, o.w as f64, o.h as f64), px: (o.w, o.h), scale: o.scale })
+        .collect()
 }
 
 /// Captura + codificación de un monitor (o del patrón de prueba).

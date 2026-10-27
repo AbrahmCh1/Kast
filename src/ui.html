@@ -115,7 +115,7 @@ h2 { margin: 26px 0 10px; font-size: 14px; font-weight: 600; }
 .status.on::before { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
 .tag .i { width: 11px; height: 11px; vertical-align: -1px; margin-right: 3px; }
 .tag { font-size: 11px; padding: 1px 7px; border-radius: 9px; background: var(--card2); border: 1px solid var(--stroke); color: var(--sub); white-space: nowrap; }
-.dev-f { display: flex; gap: 6px; align-items: center; }
+.dev-f { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .dev-f .grow { flex: 1; }
 .waiting { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 10%, transparent); font-size: 13px; }
 .waiting .spin { width: 16px; height: 16px; margin: 0; border-width: 2px; flex: none; }
@@ -149,6 +149,21 @@ h2 { margin: 26px 0 10px; font-size: 14px; font-weight: 600; }
 .screens .srow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: center; font-size: 13px; }
 .screens .srow label { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .screens .srow select:disabled { opacity: .45; }
+.screens .vrow label .i { width: 16px; height: 16px; color: var(--accent); flex: none; }
+.screens .vrow label .sub { overflow: hidden; text-overflow: ellipsis; }
+.screens .vrow .btn.icon { width: 22px; height: 22px; font-size: 15px; margin-left: auto; flex: none; }
+.screens .vadd { align-self: flex-start; height: 28px; padding: 0 8px; font-size: 12.5px; color: var(--accent); }
+.screens .vadd .i { width: 14px; height: 14px; }
+.screens .vhead { font-size: 12px; color: var(--sub); margin-top: 4px; }
+.vmap { position: relative; margin: 2px auto 0; max-width: 100%; }
+.vmap .vm { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden;
+  border: 2px solid transparent; background-clip: padding-box; border-radius: 7px; background-color: var(--card2); box-shadow: inset 0 0 0 1px var(--stroke);
+  font-size: 10.5px; line-height: 1.2; color: var(--faint); text-align: center; white-space: nowrap; }
+.vmap .vm b { font-size: 12.5px; color: var(--sub); }
+.vmap .vm.real { background-color: color-mix(in srgb, var(--accent) 16%, var(--card2)); box-shadow: inset 0 0 0 1px var(--accent); color: var(--text); }
+.vmap .vm.virt { background-color: color-mix(in srgb, var(--accent) 7%, var(--card2)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent); color: var(--text);
+  background-image: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--accent) 9%, transparent) 6px 12px); }
+.vmap .vm.add:hover { box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
 .cal-row { display: grid; grid-template-columns: 110px 1fr 38px; align-items: center; gap: 10px; }
 .cal-row output { text-align: right; color: var(--sub); font-variant-numeric: tabular-nums; }
 .cal-row.fine { grid-template-columns: 92px 26px 1fr 26px 30px; gap: 6px; }
@@ -1062,9 +1077,9 @@ const platName = p => p === 'mac' ? 'Mac' : p === 'windows' ? 'Windows' : p === 
 /** «tu pantalla 1» / «tus pantallas 1 y 2» / «todas tus pantallas». */
 const screensText = r => {
   const ms = r.monitors?.length ? r.monitors : [r.monitor];
-  if (ms.length === 1) return `tu pantalla ${ms[0]}`;
-  if (L?.me?.displays && ms.length >= L.me.displays.length) return 'todas tus pantallas';
-  return `tus pantallas ${ms.slice(0, -1).join(', ')} y ${ms[ms.length - 1]}`;
+  const t = ms.length === 1 ? `tu pantalla ${ms[0]}` : L?.me?.displays && ms.length >= L.me.displays.length ? 'todas tus pantallas'
+    : `tus pantallas ${ms.slice(0, -1).join(', ')} y ${ms[ms.length - 1]}`;
+  return r.virt ? `${t} y crear ${r.virt === 1 ? 'una pantalla virtual' : `${r.virt} pantallas virtuales`} en este equipo (se quitan al desconectar)` : t;
 };
 
 function onLink(m) {
@@ -1126,9 +1141,9 @@ function renderLink() {
   const sb = $('#linkSessions'); sb.innerHTML = '';
   for (const s of sess) {
     const text = s.dir === 'in'
-      ? (s.state === 'live' ? `${s.control ? 'Controlando' : 'Viendo'} la pantalla ${s.monitor} de <b>${esc(s.peer)}</b>` : s.state === 'waiting'
+      ? (s.state === 'live' ? `${s.control ? 'Controlando' : 'Viendo'} ${s.virt ? 'una pantalla virtual' : `la pantalla ${s.monitor}`} de <b>${esc(s.peer)}</b>` : s.state === 'waiting'
         ? `Esperando que <b>${esc(s.peer)}</b> acepte · código <span class="code sm">${esc(s.code)}</span>` : `Conectando con <b>${esc(s.peer)}</b>…`)
-      : `<b>${esc(s.peer)}</b> está ${s.control ? 'controlando' : 'viendo'} tu pantalla ${s.monitor}${
+      : `<b>${esc(s.peer)}</b> está ${s.control ? 'controlando' : 'viendo'} ${s.virt ? 'una pantalla virtual creada para él en este equipo' : `tu pantalla ${s.monitor}`}${
         s.via === 'password' ? ' <span class="tag">con la contraseña de acceso desatendido</span>' : s.via === 'pair' ? ' <span class="tag">recién emparejado</span>' : ''}`;
     const c = el(`<div class="card row"><div class="ic dev-ic">${icon(s.dir === 'in' ? 'mon' : 'link')}</div>
       <div class="body">${text}</div>
@@ -1145,61 +1160,103 @@ function renderLink() {
       <span class="sub">Abre Kast en el otro equipo. Si no aparece, usa «Agregar dispositivo» con su IP.</span></div></div>`;
     return;
   }
-  const locals = (S?.mons || []).map(m => `<option value="${m.i}">Pantalla completa en mi monitor ${m.i} · ${esc(m.name)}</option>`).join('');
+  const mons = S?.mons || [];
+  const locals = mons.map(m => `<option value="${m.i}" title="A pantalla completa en mi monitor ${m.i}">Mi monitor ${m.i} · ${esc(m.name)}</option>`).join('');
   for (const d of L.devices) {
-    // Pantallas suyas elegidas: monitor -> dónde mostrarla (0 = una ventana, n = mi monitor n).
-    const sel = linkSel[d.id] || (linkSel[d.id] = { screens: { 1: 0 }, control: true });
+    // Pantallas suyas elegidas: monitor -> dónde mostrarla (0 = una ventana, n = mi monitor n). Y pantallas virtuales
+    // nuevas (si el equipo puede crearlas): el monitor mío donde se verá cada una, del que toman el tamaño; el equipo
+    // las coloca junto a las suyas como están mis monitores.
+    const sel = linkSel[d.id] || (linkSel[d.id] = { screens: { 1: 0 }, virt: [], control: true });
+    if (!d.vd) sel.virt = [];
     const waiting = L.sessions.find(s => s.dir === 'in' && s.peer === d.name && s.state !== 'live');
     const tags = [platName(d.platform), d.trusted ? 'Puede verme' : '', d.known ? 'Conocido' : '', d.manual ? 'Por IP' : ''].filter(Boolean)
       .map(t => `<span class="tag">${t}</span>`).join(' ');
     const scr = d.displays.length ? d.displays : [null];
-    const rows = scr.map((x, i) => `<div class="srow">
-        <label title="Ver la pantalla ${i + 1}"><input type="checkbox" data-scr="${i + 1}"${(i + 1) in sel.screens ? ' checked' : ''}>Pantalla ${i + 1}${x ? ` · ${x[0]} × ${x[1]}` : ''}</label>
-        <select data-show="${i + 1}"${(i + 1) in sel.screens ? '' : ' disabled'}><option value="0">En una ventana</option>${locals}</select></div>`).join('');
     const c = el(`<div class="card dev${d.online ? '' : ' off'}">
       <div class="dev-h"><div class="dev-ic">${platIcon(d.platform)}</div>
         <div class="t"><div class="title">${esc(d.name)}</div><div class="sub">${[d.short_id ? 'ID ' + d.short_id : '', d.addr || ''].filter(Boolean).map(esc).join(' · ')}</div></div>
         <span class="status${d.online ? ' on' : ''}">${d.online ? 'En línea' : 'Sin conexión'}</span></div>
       <div>${tags}</div>
       ${d.online && !d.sharing ? '<div class="note">No permite que otros vean sus pantallas.</div>' : ''}
-      <div class="screens">
-        <div class="head"><span>${scr.length > 1 ? 'Sus pantallas (puedes ver varias a la vez)' : 'Su pantalla'}</span><span>Mostrar en</span></div>
-        ${rows}
-      </div>
+      <div class="screens"></div>
       <div class="checks"><label><input type="checkbox" data-k="control"${sel.control ? ' checked' : ''}>Controlar teclado y ratón</label></div>
       ${waiting ? `<div class="waiting"><div class="spin"></div><div>${waiting.state === 'waiting'
         ? `Acepta en <b>${esc(d.name)}</b>. Código: <span class="code sm">${esc(waiting.code)}</span>` : 'Conectando…'}</div></div>` : ''}
-      <div class="dev-f"><button class="btn primary" data-a="go"${d.online && d.sharing && !waiting ? '' : ' disabled'}>${icon('play')}Conectar</button>
-        <button class="btn" data-a="auth"${d.online && d.sharing && !waiting ? '' : ' disabled'} title="Conectar con la contraseña de acceso desatendido o con un código de emparejamiento">${icon('key')}Contraseña o código</button>
+      <div class="dev-f"><button class="btn primary" data-a="go">${icon('play')}Conectar</button>
+        <button class="btn" data-a="auth" title="Conectar con la contraseña de acceso desatendido o con un código de emparejamiento">${icon('key')}Contraseña o código</button>
         <div class="grow"></div><button class="btn ghost" data-a="forget" title="Olvidar este dispositivo">${icon('trash')}</button></div>
     </div>`);
-    const screensOf = () => Object.entries(sel.screens).map(([m, sh]) => ({ monitor: +m, show_on: +sh })).sort((a, b) => a.monitor - b.monitor);
-    const go = $('[data-a=go]', c), auth = $('[data-a=auth]', c);
+    const sbox = $('.screens', c), go = $('[data-a=go]', c), auth = $('[data-a=auth]', c);
+    const reals = () => Object.entries(sel.screens).map(([m, sh]) => ({ monitor: +m, show_on: +sh })).sort((a, b) => a.monitor - b.monitor);
+    const screensOf = () => [...reals(), ...sel.virt.map(sh => ({ virtual: true, show_on: sh }))];
+    // Las virtuales se colocan junto a una de sus pantallas reales vista a pantalla completa en uno de mis monitores.
+    const anchored = () => !sel.virt.length || reals().some(x => x.show_on > 0);
+    const free = () => mons.map(m => m.i).filter(i => !Object.values(sel.screens).includes(i) && !sel.virt.includes(i));
+    // Cada monitor mío muestra una sola pantalla: la real que lo ocupaba pasa a una ventana y la virtual se quita.
+    const claim = (v, keepReal, keepVirt) => {
+      if (!v) return;
+      for (const [o, sh] of Object.entries(sel.screens)) if (+o !== keepReal && sh === v) sel.screens[o] = 0;
+      sel.virt = sel.virt.filter((sh, k) => k === keepVirt || sh !== v);
+    };
+    const res = i => { const m = mons.find(x => x.i === i); return m ? `${m.pw}×${m.ph}` : ''; };
+    // Mis monitores, como están colocados, con lo que mostrará cada uno.
+    const mapHtml = () => {
+      const minX = Math.min(...mons.map(m => m.x)), minY = Math.min(...mons.map(m => m.y));
+      const W = Math.max(...mons.map(m => m.x + m.w)) - minX, H = Math.max(...mons.map(m => m.y + m.h)) - minY;
+      const pct = (v, t) => `${(v / t * 100).toFixed(3)}%`;
+      return `<div class="vhead">Así quedará en tus monitores${d.vd && free().length ? ' · pulsa uno libre para poner ahí una pantalla virtual' : ''}</div>
+        <div class="vmap" style="width:${Math.round(84 * W / H)}px;aspect-ratio:${W}/${H}">${mons.map(m => {
+          const r = Object.entries(sel.screens).find(([, sh]) => sh === m.i), k = sel.virt.indexOf(m.i);
+          const [cls, what] = r ? ['real', `Pantalla ${r[0]}`] : k >= 0 ? ['virt', `Virtual ${k + 1}`] : [d.vd ? 'free add' : 'free', 'Libre'];
+          return `<div class="vm ${cls}" data-mon="${m.i}" title="Mi monitor ${m.i} · ${esc(m.name)}${cls === 'free add' ? ' · pulsa para poner aquí una pantalla virtual' : ''}"
+            style="left:${pct(m.x - minX, W)};top:${pct(m.y - minY, H)};width:${pct(m.w, W)};height:${pct(m.h, H)}"><b>${m.i}</b>${what}</div>`;
+        }).join('')}</div>`;
+    };
     const refreshGo = () => {
-      const n = Object.keys(sel.screens).length, can = d.online && d.sharing && !waiting && n > 0;
-      go.disabled = auth.disabled = !can;
+      const n = Object.keys(sel.screens).length + sel.virt.length;
+      go.disabled = auth.disabled = !(d.online && d.sharing && !waiting && Object.keys(sel.screens).length && anchored());
       go.lastChild.textContent = n > 1 ? `Conectar (${n} pantallas)` : 'Conectar';
     };
-    $$('[data-show]', c).forEach(x => {
-      const m = +x.dataset.show;
-      x.value = String(sel.screens[m] ?? 0);
-      x.onchange = () => {
-        // Dos pantallas a pantalla completa en el mismo monitor se taparían: la anterior pasa a ventana.
-        const v = +x.value;
-        if (v) for (const [o, sh] of Object.entries(sel.screens)) if (+o !== m && sh === v) { sel.screens[o] = 0; $(`[data-show="${o}"]`, c).value = '0'; }
-        sel.screens[m] = v;
-      };
-    });
-    $$('[data-scr]', c).forEach(x => x.onchange = () => {
-      const m = +x.dataset.scr, s2 = $(`[data-show="${m}"]`, c);
-      if (x.checked) sel.screens[m] = +s2.value; else delete sel.screens[m];
-      s2.disabled = !x.checked;
+    const draw = () => {
+      const rows = scr.map((x, i) => `<div class="srow">
+          <label title="Ver la pantalla ${i + 1}"><input type="checkbox" data-scr="${i + 1}"${(i + 1) in sel.screens ? ' checked' : ''}>Pantalla ${i + 1}${x ? ` · ${x[0]} × ${x[1]}` : ''}</label>
+          <select data-show="${i + 1}"${(i + 1) in sel.screens ? '' : ' disabled'}><option value="0">En una ventana</option>${locals}</select></div>`).join('');
+      const vrows = sel.virt.map((sh, k) => `<div class="srow vrow">
+          <label title="Pantalla nueva en ${esc(d.name)}, del tamaño de tu monitor ${sh}; se quita al desconectar">${icon('mon')}Virtual ${k + 1}<span class="sub">· ${res(sh)}</span>
+            <button class="btn ghost icon" data-vdel="${k}" title="Quitar esta pantalla virtual">×</button></label>
+          <select data-vshow="${k}">${locals}</select></div>`).join('');
+      const fulls = sel.virt.length || Object.values(sel.screens).some(v => v > 0);
+      sbox.innerHTML = `<div class="head"><span>${scr.length > 1 ? 'Sus pantallas (puedes ver varias a la vez)' : 'Su pantalla'}</span><span>Mostrar en</span></div>
+        ${rows}${vrows}
+        ${d.vd && mons.length ? `<button class="btn ghost vadd" data-a="vadd"${free().length ? ' title="Una pantalla más en ' + esc(d.name) + ', del tamaño de uno de tus monitores"' : ' disabled'}>${icon('plus')}Añadir pantalla virtual</button>` : ''}
+        ${mons.length && (fulls || (d.vd && mons.length > 1)) ? mapHtml() : ''}
+        ${anchored() ? '' : '<div class="note">Las pantallas virtuales se colocan junto a una de sus pantallas reales: muestra al menos una a pantalla completa en uno de tus monitores.</div>'}`;
+      $$('[data-show]', sbox).forEach(x => {
+        const m = +x.dataset.show;
+        x.value = String(sel.screens[m] ?? 0);
+        x.onchange = () => { const v = +x.value; claim(v, m, -1); sel.screens[m] = v; draw(); };
+      });
+      $$('[data-scr]', sbox).forEach(x => x.onchange = () => {
+        const m = +x.dataset.scr;
+        if (x.checked) { const v = +$(`[data-show="${m}"]`, sbox).value; claim(v, m, -1); sel.screens[m] = v; } else delete sel.screens[m];
+        draw();
+      });
+      $$('[data-vshow]', sbox).forEach(x => {
+        const k = +x.dataset.vshow;
+        x.value = String(sel.virt[k]);
+        x.onchange = () => { const v = +x.value; sel.virt[k] = v; claim(v, 0, k); draw(); };
+      });
+      $$('[data-vdel]', sbox).forEach(b => b.onclick = e => { e.preventDefault(); sel.virt.splice(+b.dataset.vdel, 1); draw(); });
+      const add = v => { sel.virt.push(v); claim(v, 0, sel.virt.length - 1); draw(); };
+      const vadd = $('[data-a=vadd]', sbox);
+      if (vadd) vadd.onclick = () => { const f = free(); if (f.length) add(f[0]); };
+      $$('.vm.add', sbox).forEach(b => b.onclick = () => add(+b.dataset.mon));
       refreshGo();
-    });
+    };
     $('[data-k=control]', c).onchange = e => sel.control = e.target.checked;
     go.onclick = () => { const sc = screensOf(); linkCmd({ cmd: 'connect', id: d.id, monitor: sc[0].monitor, show_on: sc[0].show_on, screens: sc, control: sel.control }); };
     auth.onclick = () => authDialog({ id: d.id, name: d.name, screens: screensOf(), control: sel.control });
-    refreshGo();
+    draw();
     $('[data-a=forget]', c).onclick = async () => {
       if (await modal({ title: 'Olvidar dispositivo', body: `<p>¿Olvidar <b>${esc(d.name)}</b>? Si podía ver tus pantallas, tendrá que volver a pedir permiso.</p>`, ok: 'Olvidar', danger: true }))
         linkCmd({ cmd: 'forget', id: d.id });

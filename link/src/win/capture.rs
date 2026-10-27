@@ -3,6 +3,7 @@ use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::*;
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::core::{Interface, Result};
 
 pub struct Output {
@@ -11,6 +12,8 @@ pub struct Output {
     pub y: i32,
     pub w: u32,
     pub h: u32,
+    /// Escala de Windows (1.0 = 100 %).
+    pub scale: f64,
     adapter: IDXGIAdapter1,
     output: IDXGIOutput,
 }
@@ -27,12 +30,15 @@ pub fn outputs() -> Result<Vec<Output>> {
             if d.AttachedToDesktop.as_bool() {
                 let n = d.DeviceName.iter().position(|&c| c == 0).unwrap_or(32);
                 let r = d.DesktopCoordinates;
+                let (mut dx, mut dy) = (96u32, 96u32);
+                let _ = unsafe { GetDpiForMonitor(d.Monitor, MDT_EFFECTIVE_DPI, &mut dx, &mut dy) };
                 list.push(Output {
                     name: String::from_utf16_lossy(&d.DeviceName[..n]),
                     x: r.left,
                     y: r.top,
                     w: (r.right - r.left) as u32,
                     h: (r.bottom - r.top) as u32,
+                    scale: dx as f64 / 96.0,
                     adapter: adapter.clone(),
                     output,
                 });

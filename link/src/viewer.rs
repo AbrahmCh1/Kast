@@ -23,6 +23,14 @@ pub struct Shared {
     pub cursor: (i32, i32, bool),
 }
 
+/// Dónde está en el otro equipo la pantalla de una sesión (`bounds`, en las unidades de su escritorio). Con varias
+/// pantallas del mismo equipo (`group`), arrastrar con el botón pulsado de una ventana a otra sigue el arrastre allí
+/// (p. ej. llevar una ventana a una pantalla virtual).
+pub struct Geo {
+    pub group: String,
+    pub bounds: crate::virt::Rect,
+}
+
 /// Envía al otro equipo los archivos soltados en la ventana.
 pub type FileDrop = Arc<dyn Fn(Vec<PathBuf>) + Send + Sync>;
 
@@ -41,7 +49,8 @@ pub enum Event {
     /// Abre la ventana de una sesión. `monitor`: None = ventana, Some(n) = pantalla completa en el monitor n.
     /// `input`: con control, por aquí salen el teclado y el ratón hacia el otro equipo.
     /// `files`: con control, recibe los archivos que se arrastran a la ventana.
-    Open { session: u64, shared: Arc<Mutex<Shared>>, monitor: Option<usize>, title: String, input: Option<Sender<Vec<u8>>>, files: Option<FileDrop> },
+    Open { session: u64, shared: Arc<Mutex<Shared>>, monitor: Option<usize>, title: String, input: Option<Sender<Vec<u8>>>, files: Option<FileDrop>,
+           geo: Option<Geo> },
     Redraw(u64),
     /// Estado que se muestra en el título (p. ej. el progreso de un envío); None lo quita.
     Status { session: u64, text: Option<String> },
@@ -74,6 +83,7 @@ struct Win {
     drag_asked: bool,
     /// Tras sacar archivos arrastrando, lo que se suelte en esta misma ventana no se reenvía.
     ignore_drops: Option<Instant>,
+    geo: Option<Geo>,
     /// HWND de la ventana (Windows: atajos del sistema hacia el otro equipo).
     #[cfg_attr(not(windows), allow(dead_code))]
     hwnd: isize,
@@ -225,6 +235,27 @@ struct App {
 }
 
 impl App {
+    /// Con un botón pulsado, el ratón salió de la ventana `id` y está sobre la de otra pantalla del mismo equipo: el
+    /// punto equivalente en píxeles de la imagen de `id` (fuera de ella), para que el arrastre siga en esa pantalla.
+    fn across(&self, id: WindowId, x: f64, y: f64) -> Option<(i32, i32)> {
+        let a = self.wins.get(&id)?;
+        let ga = a.geo.as_ref()?;
+        if a.input.is_none() || !a.buttons.iter().any(|b| *b) || a.to_remote(x, y).is_some() { return None; }
+        let pa = a.window.inner_position().ok()?;
+        let (sx, sy) = (pa.x as f64 + x, pa.y as f64 + y);
+        let (_, _, _, aw, ah) = a.layout;
+        self.wins.values().filter(|b| b.session != a.session).find_map(|b| {
+            let gb = b.geo.as_ref().filter(|g| g.group == ga.group)?;
+            let pb = b.window.inner_position().ok()?;
+            let (bx, by) = b.to_remote(sx - pb.x as f64, sy - pb.y as f64)?;
+            let (_, _, _, bw, bh) = b.layout;
+            // Del píxel de su imagen a su escritorio, y de ahí a píxeles de la imagen de `id`.
+            let gx = gb.bounds.x + bx as f64 * gb.bounds.w / bw as f64;
+            let gy = gb.bounds.y + by as f64 * gb.bounds.h / bh as f64;
+            Some((((gx - ga.bounds.x) * aw as f64 / ga.bounds.w).round() as i32, ((gy - ga.bounds.y) * ah as f64 / ga.bounds.h).round() as i32))
+        })
+    }
+
     fn close(&mut self, el: &ActiveEventLoop, id: WindowId) {
         if let Some(mut w) = self.wins.remove(&id) {
             w.release_all();
@@ -241,6 +272,14 @@ impl ApplicationHandler<Event> for App {
     fn resumed(&mut self, _el: &ActiveEventLoop) {}
 
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        // Arrastrando hacia la ventana de otra pantalla del mismo equipo: el ratón sigue allí.
+        if let WindowEvent::CursorMoved { position, .. } = &event {
+            if let Some(p) = self.across(id, position.x, position.y) {
+                let w = self.wins.get_mut(&id).unwrap();
+                if w.pos != Some(p) { w.pos = Some(p); w.send(Input::Move { x: p.0, y: p.1 }); }
+                return;
+            }
+        }
         // Con control, el teclado y el ratón van al otro equipo (salvo los atajos locales).
         if let Some(w) = self.wins.get_mut(&id) {
             if w.input.is_some() {
@@ -291,7 +330,7 @@ impl ApplicationHandler<Event> for App {
 
     fn user_event(&mut self, el: &ActiveEventLoop, event: Event) {
         match event {
-            Event::Open { session, shared, monitor, title, input, files } => {
+            Event::Open { session, shared, monitor, title, input, files, geo } => {
                 let mut attrs = Window::default_attributes().with_title(&title).with_inner_size(LogicalSize::new(1280.0, 720.0));
                 if let Some(m) = monitor.and_then(|n| nth_monitor(el, n)) {
                     attrs = attrs.with_fullscreen(Some(Fullscreen::Borderless(Some(m))));
@@ -308,7 +347,7 @@ impl ApplicationHandler<Event> for App {
                 self.by_session.insert(session, id);
                 self.wins.insert(id, Win { session, window, surface, shared, input, layout: (0.0, 0.0, 0.0, 0, 0),
                                            mods: ModifiersState::empty(), keys: HashSet::new(), buttons: [false; 5], pos: None,
-                                           title, files, drops: Vec::new(), drag_asked: false, ignore_drops: None, hwnd });
+                                           title, files, drops: Vec::new(), drag_asked: false, ignore_drops: None, geo, hwnd });
             }
             Event::Status { session, text } => {
                 if let Some(w) = self.by_session.get(&session).and_then(|id| self.wins.get(id)) {

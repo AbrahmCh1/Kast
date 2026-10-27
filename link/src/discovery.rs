@@ -17,6 +17,8 @@ pub struct Beacon {
     /// (ancho, alto) de cada monitor, de izquierda a derecha.
     pub displays: Vec<(u32, u32)>,
     pub sharing: bool,
+    /// Puede crear pantallas virtuales para quien lo ve (macOS).
+    pub vd: bool,
 }
 
 pub enum Packet {
@@ -55,7 +57,7 @@ pub fn broadcast_targets() -> Vec<SocketAddr> {
 
 pub fn encode(b: &Beacon) -> Vec<u8> {
     json!({
-        "kast": 1, "id": b.id, "name": b.name, "platform": b.platform, "port": b.port, "sharing": b.sharing,
+        "kast": 1, "id": b.id, "name": b.name, "platform": b.platform, "port": b.port, "sharing": b.sharing, "vd": b.vd,
         "displays": b.displays.iter().map(|(w, h)| json!([w, h])).collect::<Vec<_>>(),
     })
     .to_string()
@@ -75,6 +77,7 @@ pub fn decode(data: &[u8]) -> Option<Packet> {
         platform: s("platform").unwrap_or_default(),
         port: v.get("port")?.as_u64()? as u16,
         sharing: v.get("sharing").and_then(Value::as_bool).unwrap_or(true),
+        vd: v.get("vd").and_then(Value::as_bool).unwrap_or(false),
         displays: v.get("displays").and_then(Value::as_array).map(|a| {
             a.iter().take(16).filter_map(|d| Some((d.get(0)?.as_u64()? as u32, d.get(1)?.as_u64()? as u32))).collect()
         }).unwrap_or_default(),

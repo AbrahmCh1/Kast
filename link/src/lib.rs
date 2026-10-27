@@ -7,6 +7,7 @@ pub mod input;
 pub mod net;
 pub mod share;
 pub mod store;
+pub mod virt;
 
 #[cfg(not(target_os = "ios"))]
 pub mod agent;
@@ -39,6 +40,14 @@ pub struct DisplayInfo {
     pub y: i32,
     pub w: u32,
     pub h: u32,
+}
+
+/// Monitor de este equipo como destino de una pantalla remota: rectángulo en el escritorio (en las unidades del
+/// sistema: píxeles en Windows, puntos en macOS), píxeles reales y escala (1.0, 1.5, 2.0…).
+pub struct LocalMon {
+    pub rect: virt::Rect,
+    pub px: (u32, u32),
+    pub scale: f64,
 }
 
 /// Fotograma codificado en H.264 Annex B.

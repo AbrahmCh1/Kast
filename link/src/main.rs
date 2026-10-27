@@ -8,6 +8,7 @@
 //!   kast-link play <archivo> [--dump imagen.bmp]                   decodificar un flujo grabado (pruebas)
 //!   kast-link probe <ip:puerto> [--home dir] [--secs 10] [--text t] [--clip t] [--password p | --pair código]
 //!                                                   cliente de iOS desde la terminal (pruebas)
+//!   kast-link vdisplay <ancho> <alto> [--hidpi 1] [--at x,y] [--secs 5]   crear un momento una pantalla virtual (pruebas)
 use kast_link::{Res, agent, mobile, platform, store, stream};
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
@@ -69,6 +70,7 @@ fn run() -> Res<()> {
         Some("record") => record(&o),
         Some("play") => play(&o),
         Some("probe") => probe(&o),
+        Some("vdisplay") => vdisplay(&o),
         Some("version") | Some("--version") => { println!("kast-link {VERSION}"); Ok(()) }
         _ => {
             println!("kast-link {VERSION} — pantalla de otro equipo por la red local (cifrado)\n");
@@ -81,6 +83,46 @@ fn run() -> Res<()> {
             Ok(())
         }
     }
+}
+
+// ---------------------------------------------------------------- pruebas: pantalla virtual
+
+fn print_displays() {
+    let px = platform::displays().unwrap_or_default();
+    for (i, (id, b)) in platform::display_ids().into_iter().zip(platform::display_bounds()).enumerate() {
+        let (w, h) = px.get(i).map(|d| (d.w, d.h)).unwrap_or_default();
+        println!("  {}  id {id}  en {},{}  {}x{} (escritorio)  {w}x{h} píxeles", i + 1, b.x, b.y, b.w, b.h);
+    }
+}
+
+/// Espera atendiendo el bucle principal (en macOS, los cambios de pantallas llegan por él; en el agente lo atiende
+/// el bucle de ventanas).
+fn pump(d: Duration) {
+    #[cfg(target_os = "macos")]
+    unsafe { objc2_core_foundation::CFRunLoop::run_in_mode(objc2_core_foundation::kCFRunLoopDefaultMode, d.as_secs_f64(), false); }
+    #[cfg(not(target_os = "macos"))]
+    std::thread::sleep(d);
+}
+
+fn vdisplay(o: &Opts) -> Res<()> {
+    let w: u32 = o.pos.get(1).and_then(|v| v.parse().ok()).ok_or("falta el ancho")?;
+    let h: u32 = o.pos.get(2).and_then(|v| v.parse().ok()).ok_or("falta el alto")?;
+    println!("antes:");
+    print_displays();
+    let v = platform::vdisplay::create("Kast (prueba)", (w, h), o.num(&["--hidpi"], 0) == 1)?;
+    if let Some((x, y)) = o.get(&["--at"]).and_then(|s| s.split_once(',')) {
+        pump(Duration::from_millis(500));
+        platform::vdisplay::arrange(&[(v.id, x.trim().parse()?, y.trim().parse()?)])?;
+    }
+    pump(Duration::from_millis(1000));
+    println!("con la pantalla virtual {}:", v.id);
+    print_displays();
+    pump(Duration::from_secs(o.num(&["--secs"], 5)));
+    drop(v);
+    pump(Duration::from_secs(o.num(&["--after"], 1)));
+    println!("después:");
+    print_displays();
+    Ok(())
 }
 
 // ---------------------------------------------------------------- pruebas: cliente de iOS
