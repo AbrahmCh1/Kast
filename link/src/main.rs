@@ -58,8 +58,10 @@ fn run() -> Res<()> {
     match o.pos.first().map(String::as_str) {
         Some("agent") => agent::run(o.num(&["--port"], agent::DEFAULT_PORT)),
         Some("list") => {
+            let ids = platform::display_ids();
             for (i, d) in platform::displays()?.iter().enumerate() {
-                println!("{}  {}  {}x{}  en {},{}", i + 1, d.name, d.w, d.h, d.x, d.y);
+                let stand_in = ids.get(i).is_some_and(|id| platform::vdisplay::placeholder(*id));
+                println!("{}  {}  {}x{}  en {},{}{}", i + 1, d.name, d.w, d.h, d.x, d.y, if stand_in { "  (reemplazo de macOS: no hay monitor)" } else { "" });
             }
             Ok(())
         }

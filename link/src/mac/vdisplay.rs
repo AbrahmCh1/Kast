@@ -8,7 +8,7 @@ use objc2::runtime::{AnyClass, AnyObject, Bool};
 use objc2::{MainThreadMarker, msg_send};
 use objc2_core_foundation::CGSize;
 use objc2_core_graphics::{CGBeginDisplayConfiguration, CGCompleteDisplayConfiguration, CGConfigureDisplayOrigin, CGConfigureOption,
-                          CGDirectDisplayID, CGDisplayConfigRef};
+                          CGDirectDisplayID, CGDisplayConfigRef, CGDisplayModelNumber, CGDisplayVendorNumber};
 use objc2_foundation::{NSArray, NSString};
 use std::ffi::CStr;
 use std::time::{Duration, Instant};
@@ -51,6 +51,12 @@ impl Drop for Virtual {
 pub const UNSUPPORTED: &str = "esta versión de macOS no permite crear pantallas virtuales";
 
 pub fn supported() -> bool { AnyClass::get(c"CGVirtualDisplay").is_some() }
+
+/// Pantalla de reemplazo de macOS: sin ningún monitor (p. ej. con el monitor puesto en otra entrada), macOS muestra una
+/// pantalla propia (fabricante «unkn», modelo «virt») que quita en cuanto aparece otra.
+pub fn placeholder(id: CGDirectDisplayID) -> bool {
+    CGDisplayVendorNumber(id) == u32::from_be_bytes(*b"unkn") && CGDisplayModelNumber(id) == u32::from_be_bytes(*b"virt")
+}
 
 /// En el hilo principal (el agente tiene ahí el bucle de ventanas, que atiende la cola principal).
 fn on_main<R: Send>(f: impl FnOnce() -> R + Send) -> R {

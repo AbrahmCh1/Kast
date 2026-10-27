@@ -82,6 +82,9 @@ pub fn supported() -> bool {
     ok
 }
 
+/// Windows no pone pantallas de reemplazo que desaparezcan al añadir otra (ver la de macOS).
+pub fn placeholder(_id: u32) -> bool { false }
+
 /// Una orden al controlador (entrada de 32 bytes, salida de 4). None si no respondió.
 fn ioctl(h: HANDLE, code: u32, data: &[u8]) -> Option<u32> {
     let mut inb = [0u8; 32];

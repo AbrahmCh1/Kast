@@ -1091,8 +1091,13 @@ impl Agent {
     fn make_virtual(&self, plan: &Value, viewer: &str) -> Res<(Vec<platform::vdisplay::Virtual>, Vec<(usize, usize)>, Vec<Option<usize>>)> {
         if !platform::vdisplay::supported() { return Err(platform::vdisplay::UNSUPPORTED.into()); }
         let ids_before = platform::display_ids();
-        let fixed: Vec<(u32, Rect)> = plan["fixed"].as_array().into_iter().flatten()
-            .filter_map(|f| Some((*ids_before.get((f.get("monitor")?.as_u64()? as usize).checked_sub(1)?)?, Rect::from_json(f.get("at")?)?)))
+        // Mis pantallas que verá en sus monitores: dónde (en su escritorio) y, si lo dice, píxeles y escala de ese monitor.
+        let mut fixed: Vec<(u32, Rect, Option<((u32, u32), f64)>)> = plan["fixed"].as_array().into_iter().flatten()
+            .filter_map(|f| {
+                let id = *ids_before.get((f.get("monitor")?.as_u64()? as usize).checked_sub(1)?)?;
+                let px = f.get("px").and_then(|p| Some((p.get(0)?.as_u64()? as u32, p.get(1)?.as_u64()? as u32)));
+                Some((id, Rect::from_json(f.get("at")?)?, px.map(|px| (px, f.get("scale").and_then(Value::as_f64).unwrap_or(1.0)))))
+            })
             .collect();
         // Escala del monitor del visor (los visores anteriores sólo dicen si es Retina).
         let wanted: Vec<Option<(Rect, (u32, u32), f64)>> = plan["virtual"].as_array().into_iter().flatten().take(4).map(|x| {
@@ -1100,11 +1105,33 @@ impl Agent {
             let scale = x.get("scale").and_then(Value::as_f64).unwrap_or(if x.get("hidpi")?.as_bool()? { 2.0 } else { 1.0 });
             Some((Rect::from_json(x.get("at")?)?, (px.get(0)?.as_u64()? as u32, px.get(1)?.as_u64()? as u32), scale))
         }).collect();
+        let name = format!("Kast · {viewer}");
+        // Un Mac sin monitor (p. ej. con el monitor puesto en otra entrada) sólo tiene una pantalla de reemplazo de macOS,
+        // que desaparece en cuanto hay otra: antes se sustituye por una virtual (del tamaño del monitor del visor donde
+        // se verá, si lo dice), para que siga teniendo su pantalla además de las nuevas.
+        let (mut stand_ins, mut swap) = (Vec::new(), Vec::new());
+        let sizes = platform::displays().unwrap_or_default();
+        for (i, &id) in ids_before.iter().enumerate() {
+            if !platform::vdisplay::placeholder(id) { continue; }
+            let f = fixed.iter().position(|f| f.0 == id);
+            let (px, scale) = f.and_then(|f| fixed[f].2).unwrap_or((sizes.get(i).map_or((1920, 1080), |d| (d.w, d.h)), 1.0));
+            let v = match platform::vdisplay::create(&name, px, scale) {
+                Ok(v) => v,
+                Err(e) => { store::log(&format!("pantalla de {viewer} en lugar de la de reemplazo: {e}")); continue }
+            };
+            let t = Instant::now();
+            while platform::display_ids().contains(&id) && t.elapsed() < Duration::from_secs(3) { std::thread::sleep(Duration::from_millis(50)); }
+            // Si macOS no la quitó, no hace falta (y se suelta la nueva).
+            if platform::display_ids().contains(&id) { continue; }
+            if let Some(f) = f { fixed[f].0 = v.id; }
+            swap.push((id, v.id));
+            stand_ins.push(v);
+        }
         let mut made: Vec<(usize, platform::vdisplay::Virtual)> = Vec::new();
         let mut last_err = None;
         for (k, w) in wanted.iter().enumerate() {
             let Some((_, px, scale)) = w else { continue };
-            match platform::vdisplay::create(&format!("Kast · {viewer}"), *px, *scale) {
+            match platform::vdisplay::create(&name, *px, *scale) {
                 Ok(v) => made.push((k, v)),
                 Err(e) => { store::log(&format!("pantalla virtual {}×{} para {viewer}: {e}", px.0, px.1)); last_err = Some(e); }
             }
@@ -1114,7 +1141,7 @@ impl Agent {
         let (ids, bounds) = (platform::display_ids(), platform::display_bounds());
         let at = |id: u32| ids.iter().position(|x| *x == id).and_then(|i| bounds.get(i).copied());
         let virt_ids: Vec<u32> = made.iter().map(|(_, v)| v.id).collect();
-        let pairs: Vec<(Rect, Rect)> = fixed.iter().filter_map(|(id, local)| Some((*local, at(*id)?))).collect();
+        let pairs: Vec<(Rect, Rect)> = fixed.iter().filter_map(|(id, local, _)| Some((*local, at(*id)?))).collect();
         let others: Vec<Rect> = ids.iter().zip(&bounds).filter(|(id, _)| !virt_ids.contains(id) && !fixed.iter().any(|f| f.0 == **id))
             .map(|(_, b)| *b).collect();
         let virt_in: Vec<(Rect, (f64, f64))> = made.iter().map(|(k, v)| {
@@ -1138,11 +1165,14 @@ impl Agent {
         }
         let ids_after = platform::display_ids();
         let index = |id: u32| ids_after.iter().position(|x| *x == id).map(|i| i + 1);
-        let remap: Vec<(usize, usize)> = ids_before.iter().enumerate().filter_map(|(i, id)| Some((i + 1, index(*id)?))).collect();
+        // (La de reemplazo pasa a ser la virtual que la sustituye.)
+        let remap: Vec<(usize, usize)> = ids_before.iter().enumerate()
+            .filter_map(|(i, id)| Some((i + 1, index(swap.iter().find(|s: &&(u32, u32)| s.0 == *id).map_or(*id, |s| s.1))?)))
+            .collect();
         let mut idx = vec![None; wanted.len()];
         for (k, v) in &made { idx[*k] = index(v.id); }
         self.displays_changed();
-        Ok((made.into_iter().map(|(_, v)| v).collect(), remap, idx))
+        Ok((made.into_iter().map(|(_, v)| v).chain(stand_ins).collect(), remap, idx))
     }
 
     /// Mis pantallas cambiaron (se crearon o quitaron virtuales): se anuncian ya, sin esperar a la siguiente vuelta.
@@ -1396,7 +1426,7 @@ fn layout_plan(screen: &Screen, more: &[Screen]) -> Value { plan_with(screen, mo
 fn plan_with(screen: &Screen, more: &[Screen], mons: &[LocalMon]) -> Value {
     let all: Vec<&Screen> = std::iter::once(screen).chain(more).collect();
     let fixed: Vec<Value> = all.iter().filter(|s| !s.virt)
-        .filter_map(|s| s.local(mons).map(|(at, _, _)| json!({"monitor": s.monitor, "at": at.json()})))
+        .filter_map(|s| s.local(mons).map(|(at, px, scale)| json!({"monitor": s.monitor, "at": at.json(), "px": [px.0, px.1], "scale": scale})))
         .collect();
     let mut used: Vec<Rect> = all.iter().filter_map(|s| s.local(mons)).map(|l| l.0).collect();
     let main = mons.iter().find(|m| m.rect.x == 0.0 && m.rect.y == 0.0).or(mons.first());
