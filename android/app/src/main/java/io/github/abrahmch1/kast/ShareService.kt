@@ -22,6 +22,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
+import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
@@ -72,6 +73,8 @@ class ShareService : Service() {
     private var multicast: WifiManager.MulticastLock? = null
     private var wifi: WifiManager.WifiLock? = null
     private var viewers = 0
+    /** Mientras alguien está conectado la pantalla se enciende y no se apaga. */
+    private var awake: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -83,6 +86,12 @@ class ShareService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == STOP) {
             stopSharing(user = true)
+            return START_NOT_STICKY
+        }
+        // Android volvió a crear el servicio tras cerrar la app: hace falta otra vez el permiso de captura.
+        if (intent == null) {
+            stopSelf()
+            KastApp.app.resumeSharing()
             return START_NOT_STICKY
         }
         // Android 14: el servicio debe estar en primer plano (tipo «proyección») antes de pedir la captura.
@@ -101,8 +110,12 @@ class ShareService : Service() {
             return START_NOT_STICKY
         }
         p.registerCallback(object : MediaProjection.Callback() {
-            // El usuario dejó de compartir desde el sistema (o Android cortó la captura).
-            override fun onStop() { handler.post { stopSharing(user = false) } }
+            // Se dejó de compartir desde el sistema (o Android cortó la captura): si la pantalla se dejó compartiendo,
+            // vuelve a compartir.
+            override fun onStop() {
+                handler.post { stopSharing(user = false) }
+                KastApp.app.main.postDelayed({ KastApp.app.resumeSharing() }, 3000)
+            }
         }, handler)
         projection = p
         pickSize()
@@ -117,7 +130,7 @@ class ShareService : Service() {
         KastApp.app.command("video", "w" to w, "h" to h, "fps" to fps)
         KastApp.app.command("share", "enabled" to true)
         Log.i("Kast", "compartiendo ${w}x$h a $fps fps")
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     /** Tamaño de la imagen: la pantalla reducida a MAX_SIDE, en un tamaño que acepte el codificador. */
@@ -189,6 +202,10 @@ class ShareService : Service() {
         codec = c
         input = s
         running = true
+        @Suppress("DEPRECATION")
+        awake = getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "kast:sesion")
+            .apply { setReferenceCounted(false); acquire() }
         drain = Thread({
             val info = MediaCodec.BufferInfo()
             while (running) {
@@ -214,6 +231,8 @@ class ShareService : Service() {
         input?.release()
         codec = null
         input = null
+        awake?.release()
+        awake = null
         Log.i("Kast", "codificador apagado")
     }
 

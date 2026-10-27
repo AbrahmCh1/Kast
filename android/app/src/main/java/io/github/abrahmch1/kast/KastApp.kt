@@ -12,6 +12,8 @@ import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.util.Log
 import android.provider.Settings
 import android.widget.Toast
 import org.json.JSONArray
@@ -71,6 +73,26 @@ class KastApp : Application() {
         command("downloads", "dir" to downloadsDir().absolutePath)
         command("perms", "input" to (ControlService.instance != null))
         command("host_state")
+    }
+
+    private var lastResume = 0L
+
+    /**
+     * Pantalla que se dejó compartiendo: si se cortó (al encenderla, al actualizar Kast, si Android paró la captura o
+     * cerró la app), vuelve a compartir. El permiso de captura se pide desde una actividad, que «Mostrar sobre otras
+     * apps» deja abrir en segundo plano; con la captura concedida por adb (PROJECT_MEDIA) no aparece el diálogo.
+     */
+    fun resumeSharing() {
+        if (!large || !prefs.getBoolean("share", false) || ShareService.instance != null || !Settings.canDrawOverlays(this)) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastResume < 15_000) return
+        lastResume = now
+        Log.i("Kast", "volviendo a compartir esta pantalla")
+        try {
+            startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("autoshare", true))
+        } catch (e: Exception) {
+            Log.w("Kast", "no se pudo volver a compartir: $e")
+        }
     }
 
     fun deviceName(): String =

@@ -305,7 +305,23 @@ Al controlarla:
 cd android && ./gradlew installDebug -PkastAbis=arm64-v8a
 ```
 
-Para una pantalla sin nadie delante, desde `adb` se puede dejar concedida la captura (`adb shell appops set io.github.abrahmch1.kast PROJECT_MEDIA allow`): Android deja de preguntar y Kast vuelve a compartir sola al encenderse.
+## Pantalla siempre compartida
+
+Para dejar una pantalla compartiendo sin nadie delante. Con **Mostrar sobre otras apps** activado, Kast vuelve a compartir sola al encenderse, al actualizarse, si Android corta la captura o si cierra la app. Y mientras alguien está conectado, enciende la pantalla y no deja que se apague. Sólo deja de compartir con su botón **Dejar de compartir**.
+
+Lo único que Android no deja automatizar desde la app es el diálogo de captura («Empezar ahora»). Se concede una vez desde un equipo con `adb`, y Android deja de preguntar, también tras reiniciar o actualizar:
+
+```bash
+adb shell appops set io.github.abrahmch1.kast PROJECT_MEDIA allow
+```
+
+Para que el ahorro de energía no la cierre nunca:
+
+```bash
+adb shell dumpsys deviceidle whitelist +io.github.abrahmch1.kast
+```
+
+Como nadie va a aceptar en la pantalla, **empareja** tu PC o Mac (código de un solo uso) o activa el **acceso desatendido**, y en **Dispositivos desconocidos** elige **Rechazar**: así entran los tuyos sin preguntar y nadie más puede pedirlo. Para deshacerlo: `adb shell appops set io.github.abrahmch1.kast PROJECT_MEDIA default`.
 
 ## Estructura
 

@@ -6,15 +6,7 @@ import android.content.Intent
 
 /** Al encender el equipo (o al actualizar Kast): si estaba compartiendo, vuelve a compartir. */
 class BootReceiver : BroadcastReceiver() {
-    override fun onReceive(ctx: Context, intent: Intent) {
-        val app = KastApp.app
-        if (!app.large || !app.prefs.getBoolean("share", false) || ShareService.instance != null) return
-        // Hace falta una actividad para el permiso de captura (con «Mostrar sobre otras apps» se puede abrir desde aquí).
-        try {
-            ctx.startActivity(Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("autoshare", true))
-        } catch (_: Exception) {
-        }
-    }
+    override fun onReceive(ctx: Context, intent: Intent) = KastApp.app.resumeSharing()
 }
 
 /** Botones de los avisos de petición de conexión. */

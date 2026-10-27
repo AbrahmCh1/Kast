@@ -41,6 +41,8 @@ class ControlService : AccessibilityService() {
         instance = this
         Log.i("Kast", "control remoto disponible")
         KastApp.app.command("perms", "input" to true)
+        // Android vuelve a enlazar el servicio (y a abrir la app) al encender o si la app se cerró.
+        KastApp.app.main.postDelayed({ KastApp.app.resumeSharing() }, 1500)
     }
 
     override fun onDestroy() {
