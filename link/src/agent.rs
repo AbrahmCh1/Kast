@@ -17,7 +17,8 @@
 //!   aprobación), y "auth":"password"|"pair" y "secret": contraseña de acceso desatendido o código de emparejamiento;
 //!   "id" también puede ser el ID de 9 dígitos de un equipo de la red. Una pantalla {"virtual":true,"show_on":n} pide
 //!   al equipo una pantalla virtual nueva del tamaño de mi monitor n, colocada junto a las suyas como están mis
-//!   monitores (ver virt.rs); "at":[x,y,w,h], "px":[w,h] y "scale" sustituyen a los de mi monitor (pruebas)
+//!   monitores (ver virt.rs); con "show_on":0, en una ventana, del tamaño de mi monitor principal y a la derecha de lo
+//!   que veo a pantalla completa; "at":[x,y,w,h], "px":[w,h] y "scale" sustituyen a los de mi monitor (pruebas)
 //!   {"cmd":"access_set","unknown":"ask"|"reject","unattended":false,"password":"…","unattended_control":true}
 //!   {"cmd":"pair_start","control":true} · {"cmd":"pair_cancel"}   código de emparejamiento de un solo uso
 //!   {"cmd":"revoke","key":"…"}                         quitar el acceso a un dispositivo
@@ -1388,15 +1389,25 @@ pub fn run(port: u16) -> Res<()> {
 }
 
 /// Pantallas virtuales pedidas y dónde se verán, con mis monitores que mostrarán sus pantallas reales, para que el
-/// otro equipo las coloque como están mis monitores (ver virt.rs).
-fn layout_plan(screen: &Screen, more: &[Screen]) -> Value {
-    let mons = platform::local_monitors();
-    let fixed: Vec<Value> = std::iter::once(screen).chain(more).filter(|s| !s.virt)
-        .filter_map(|s| s.local(&mons).map(|(at, _, _)| json!({"monitor": s.monitor, "at": at.json()})))
+/// otro equipo las coloque como están mis monitores (ver virt.rs). Una virtual en una ventana tiene el tamaño de mi
+/// monitor principal y va a la derecha de lo que veo a pantalla completa (sin nada así, a la derecha de sus pantallas).
+fn layout_plan(screen: &Screen, more: &[Screen]) -> Value { plan_with(screen, more, &platform::local_monitors()) }
+
+fn plan_with(screen: &Screen, more: &[Screen], mons: &[LocalMon]) -> Value {
+    let all: Vec<&Screen> = std::iter::once(screen).chain(more).collect();
+    let fixed: Vec<Value> = all.iter().filter(|s| !s.virt)
+        .filter_map(|s| s.local(mons).map(|(at, _, _)| json!({"monitor": s.monitor, "at": at.json()})))
         .collect();
-    let virt: Vec<Value> = more.iter().filter(|s| s.virt).map(|s| match s.local(&mons) {
-        Some((at, px, scale)) => json!({"at": at.json(), "px": [px.0, px.1], "scale": scale, "hidpi": scale >= 1.5}),
-        None => Value::Null,
+    let mut used: Vec<Rect> = all.iter().filter_map(|s| s.local(mons)).map(|l| l.0).collect();
+    let main = mons.iter().find(|m| m.rect.x == 0.0 && m.rect.y == 0.0).or(mons.first());
+    let virt: Vec<Value> = more.iter().filter(|s| s.virt).map(|s| {
+        let (at, px, scale) = s.local(mons).unwrap_or_else(|| {
+            let (r, px, scale) = main.map_or((Rect::new(0.0, 0.0, 1920.0, 1080.0), (1920, 1080), 1.0), |m| (m.rect, m.px, m.scale));
+            let at = used.iter().max_by(|a, b| (a.x + a.w).total_cmp(&(b.x + b.w))).map_or(r, |u| Rect::new(u.x + u.w, u.y, r.w, r.h));
+            used.push(at);
+            (at, s.px.unwrap_or(px), s.scale.unwrap_or(scale))
+        });
+        json!({"at": at.json(), "px": [px.0, px.1], "scale": scale, "hidpi": scale >= 1.5})
     }).collect();
     json!({"fixed": fixed, "virtual": virt})
 }
@@ -1476,5 +1487,29 @@ impl DragIn {
             self.recv = None;
             self.a.emit(json!({"t": "link", "ev": "drag_done", "session": self.session, "ok": ok}));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mon(x: f64, y: f64) -> LocalMon { LocalMon { rect: Rect::new(x, y, 1920.0, 1080.0), px: (1920, 1080), scale: 1.0 } }
+    fn virt(show_on: usize) -> Screen { Screen { virt: true, ..Screen::real(0, show_on) } }
+
+    #[test]
+    fn virtual_en_una_ventana() {
+        // Un solo monitor: su pantalla 1 en él y una virtual en una ventana, de su tamaño y a su derecha.
+        let p = plan_with(&Screen::real(1, 1), &[virt(0)], &[mon(0.0, 0.0)]);
+        assert_eq!(p["virtual"][0]["at"], json!([1920.0, 0.0, 1920.0, 1080.0]));
+        assert_eq!(p["virtual"][0]["px"], json!([1920, 1080]));
+        // Una virtual a pantalla completa en el monitor de la derecha y otra en una ventana, a continuación.
+        let p = plan_with(&Screen::real(1, 1), &[virt(2), virt(0)], &[mon(0.0, 0.0), mon(1920.0, 0.0)]);
+        assert_eq!(p["virtual"][0]["at"], json!([1920.0, 0.0, 1920.0, 1080.0]));
+        assert_eq!(p["virtual"][1]["at"], json!([3840.0, 0.0, 1920.0, 1080.0]));
+        // Todo en ventanas: nada fijo (el otro equipo la pone a la derecha de sus pantallas), del tamaño del principal.
+        let p = plan_with(&Screen::real(1, 0), &[virt(0)], &[mon(-1920.0, 0.0), mon(0.0, 0.0)]);
+        assert!(p["fixed"].as_array().unwrap().is_empty());
+        assert_eq!(p["virtual"][0]["at"], json!([0.0, 0.0, 1920.0, 1080.0]));
     }
 }

@@ -1189,8 +1189,6 @@ function renderLink() {
     const sbox = $('.screens', c), go = $('[data-a=go]', c), auth = $('[data-a=auth]', c);
     const reals = () => Object.entries(sel.screens).map(([m, sh]) => ({ monitor: +m, show_on: +sh })).sort((a, b) => a.monitor - b.monitor);
     const screensOf = () => [...reals(), ...sel.virt.map(sh => ({ virtual: true, show_on: sh }))];
-    // Las virtuales se colocan junto a una de sus pantallas reales vista a pantalla completa en uno de mis monitores.
-    const anchored = () => !sel.virt.length || reals().some(x => x.show_on > 0);
     const free = () => mons.map(m => m.i).filter(i => !Object.values(sel.screens).includes(i) && !sel.virt.includes(i));
     // Cada monitor mío muestra una sola pantalla: la real que lo ocupaba pasa a una ventana y la virtual se quita.
     const claim = (v, keepReal, keepVirt) => {
@@ -1198,7 +1196,9 @@ function renderLink() {
       for (const [o, sh] of Object.entries(sel.screens)) if (+o !== keepReal && sh === v) sel.screens[o] = 0;
       sel.virt = sel.virt.filter((sh, k) => k === keepVirt || sh !== v);
     };
-    const res = i => { const m = mons.find(x => x.i === i); return m ? `${m.pw}×${m.ph}` : ''; };
+    // Una virtual en una ventana (0) tiene el tamaño de mi monitor principal.
+    const mainMon = () => mons.find(m => m.primary) || mons.find(m => m.x === 0 && m.y === 0) || mons[0];
+    const res = i => { const m = i ? mons.find(x => x.i === i) : mainMon(); return m ? `${m.pw}×${m.ph}` : ''; };
     // Mis monitores, como están colocados, con lo que mostrará cada uno.
     const mapHtml = () => {
       const minX = Math.min(...mons.map(m => m.x)), minY = Math.min(...mons.map(m => m.y));
@@ -1214,7 +1214,7 @@ function renderLink() {
     };
     const refreshGo = () => {
       const n = Object.keys(sel.screens).length + sel.virt.length;
-      go.disabled = auth.disabled = !(d.online && d.sharing && !waiting && Object.keys(sel.screens).length && anchored());
+      go.disabled = auth.disabled = !(d.online && d.sharing && !waiting && Object.keys(sel.screens).length);
       go.lastChild.textContent = n > 1 ? `Conectar (${n} pantallas)` : 'Conectar';
     };
     const draw = () => {
@@ -1222,16 +1222,15 @@ function renderLink() {
           <label title="Ver la pantalla ${i + 1}"><input type="checkbox" data-scr="${i + 1}"${(i + 1) in sel.screens ? ' checked' : ''}>Pantalla ${i + 1}${x ? ` · ${x[0]} × ${x[1]}` : ''}</label>
           <select data-show="${i + 1}"${(i + 1) in sel.screens ? '' : ' disabled'}><option value="0">En una ventana</option>${locals}</select></div>`).join('');
       const vrows = sel.virt.map((sh, k) => `<div class="srow vrow">
-          <label title="Pantalla nueva en ${esc(d.name)}, del tamaño de tu monitor ${sh}; se quita al desconectar">${icon('mon')}Virtual ${k + 1}<span class="sub">· ${res(sh)}</span>
+          <label title="Pantalla nueva en ${esc(d.name)}, del tamaño de tu monitor ${sh || 'principal'}; se quita al desconectar">${icon('mon')}Virtual ${k + 1}<span class="sub">· ${res(sh)}</span>
             <button class="btn ghost icon" data-vdel="${k}" title="Quitar esta pantalla virtual">×</button></label>
-          <select data-vshow="${k}">${locals}</select></div>`).join('');
-      const fulls = sel.virt.length || Object.values(sel.screens).some(v => v > 0);
+          <select data-vshow="${k}"><option value="0">En una ventana</option>${locals}</select></div>`).join('');
+      const fulls = [...sel.virt, ...Object.values(sel.screens)].some(v => v > 0);
       sbox.innerHTML = `<div class="head"><span>${scr.length > 1 ? 'Sus pantallas (puedes ver varias a la vez)' : 'Su pantalla'}</span><span>Mostrar en</span></div>
         ${rows}${vrows}
-        ${d.vd && mons.length ? `<button class="btn ghost vadd" data-a="vadd"${free().length ? ' title="Una pantalla más en ' + esc(d.name) + ', del tamaño de uno de tus monitores"' : ' disabled'}>${icon('plus')}Añadir pantalla virtual</button>` : ''}
+        ${d.vd && mons.length ? `<button class="btn ghost vadd" data-a="vadd"${sel.virt.length >= 4 ? ' disabled' : ` title="Una pantalla más en ${esc(d.name)}, ${free().length ? 'del tamaño de uno de tus monitores' : 'en una ventana, del tamaño de tu monitor principal'}"`}>${icon('plus')}Añadir pantalla virtual</button>` : ''}
         ${!d.vd && d.platform === 'windows' && d.online && d.sharing && mons.length ? `<div class="vhead">Para añadirle pantallas virtuales, instala en ${esc(d.name)} el controlador de pantalla virtual de Parsec</div>` : ''}
-        ${mons.length && (fulls || (d.vd && mons.length > 1)) ? mapHtml() : ''}
-        ${anchored() ? '' : '<div class="note">Las pantallas virtuales se colocan junto a una de sus pantallas reales: muestra al menos una a pantalla completa en uno de tus monitores.</div>'}`;
+        ${mons.length && (fulls || (d.vd && mons.length > 1)) ? mapHtml() : ''}`;
       $$('[data-show]', sbox).forEach(x => {
         const m = +x.dataset.show;
         x.value = String(sel.screens[m] ?? 0);
@@ -1248,9 +1247,10 @@ function renderLink() {
         x.onchange = () => { const v = +x.value; sel.virt[k] = v; claim(v, 0, k); draw(); };
       });
       $$('[data-vdel]', sbox).forEach(b => b.onclick = e => { e.preventDefault(); sel.virt.splice(+b.dataset.vdel, 1); draw(); });
-      const add = v => { sel.virt.push(v); claim(v, 0, sel.virt.length - 1); draw(); };
+      const add = v => { if (sel.virt.length >= 4) return; sel.virt.push(v); claim(v, 0, sel.virt.length - 1); draw(); };
       const vadd = $('[data-a=vadd]', sbox);
-      if (vadd) vadd.onclick = () => { const f = free(); if (f.length) add(f[0]); };
+      // En un monitor libre si lo hay; si no, en una ventana.
+      if (vadd) vadd.onclick = () => add(free()[0] ?? 0);
       $$('.vm.add', sbox).forEach(b => b.onclick = () => add(+b.dataset.mon));
       refreshGo();
     };

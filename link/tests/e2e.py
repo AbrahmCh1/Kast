@@ -310,7 +310,8 @@ try:
     # Pantallas virtuales: A pide la pantalla 1 de B en un monitor y una virtual nueva en el monitor de su derecha. Si B
     # puede (un Mac, o Windows con el controlador de Parsec), la crea con ese tamaño, A abre las dos con una sola
     # aprobación y al desconectar B la quita; si no, A recibe el motivo y ve sólo la 1.
-    nb = len(B.settled(lambda m: True)["me"]["displays"])
+    B_displays = B.settled(lambda m: True)["me"]["displays"]
+    nb = len(B_displays)
     A.send(cmd="connect", id=me_b["id"], control=False, screens=[
         {"monitor": 1, "show_on": 9, "at": [0, 0, 1920, 1080]},
         {"virtual": True, "show_on": 9, "at": [1920, 0, 1280, 720], "px": [1280, 720], "scale": 1}])
@@ -330,6 +331,23 @@ try:
         B.settled(lambda m: not m["sessions"])
         B.settled(lambda m: len(m["me"]["displays"]) == nb)
         print(f"16) pantalla virtual de 1280×720 creada en B, vista junto a su pantalla 1 y quitada al desconectar")
+
+        # Con un solo monitor: la pantalla 1 de B y una virtual, las dos en ventanas. La virtual tiene el tamaño del
+        # monitor principal de A y B la pone a la derecha de sus pantallas.
+        A.send(cmd="connect", id=me_b["id"], control=False, screens=[{"monitor": 1, "show_on": 0}, {"virtual": True, "show_on": 0}])
+        req10 = B.wait(lambda m: m.get("ev") == "request")
+        assert req10.get("virt") == 1, req10
+        B.send(cmd="answer", req=req10["req"], accept=True, remember=False, control=False)
+        got = A.wait(lambda m: (m.get("ev") == "toast" and m.get("err")) or (m.get("ev") == "state" and len(lives(m)) == 2), 40)
+        assert got.get("ev") == "state", got
+        assert [x["show_on"] for x in lives(got)] == [0, 0] and sum(1 for x in lives(got) if x["virt"]) == 1, got["sessions"]
+        mb = B.settled(lambda m: len(m["me"]["displays"]) == nb + 1)["me"]
+        size = next(d for d in mb["displays"] if d not in B_displays or mb["displays"].count(d) > B_displays.count(d))
+        for x in lives(got):
+            A.send(cmd="disconnect", session=x["session"])
+        A.settled(lambda m: not m["sessions"])
+        B.settled(lambda m: len(m["me"]["displays"]) == nb)
+        print(f"17) pantalla virtual en una ventana: {size[0]}×{size[1]} (el monitor principal de A), quitada al desconectar")
     else:
         if me_b.get("vd"):
             print(f"::warning::B no pudo crear la pantalla virtual en este equipo: {got['msg']}")
