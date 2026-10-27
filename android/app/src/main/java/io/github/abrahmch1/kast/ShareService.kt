@@ -22,6 +22,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
+import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
 import android.view.WindowManager
@@ -63,6 +64,8 @@ class ShareService : Service() {
     private var input: Surface? = null
     private var drain: Thread? = null
     @Volatile private var running = false
+    /** Cuándo salió el último fotograma clave. */
+    @Volatile private var lastKey = 0L
     private var w = 1920
     private var h = 1080
     private var fps = FPS
@@ -139,7 +142,17 @@ class ShareService : Service() {
     fun capture(on: Boolean) = handler.post { if (on) startEncoder() else stopEncoder() }
 
     fun keyframe() {
+        val asked = SystemClock.elapsedRealtime()
         try { codec?.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) }) } catch (_: Exception) { }
+        // Con la pantalla quieta no llegan imágenes nuevas al codificador (Android repite la última sólo 10 veces) y
+        // sin una nueva no sale el fotograma clave: si no ha salido enseguida, se reinicia el codificador, cuya
+        // primera imagen siempre es clave.
+        handler.postDelayed({
+            if (codec != null && lastKey < asked) {
+                stopEncoder()
+                startEncoder()
+            }
+        }, 250)
     }
 
     private fun format(full: Boolean) = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
@@ -148,7 +161,7 @@ class ShareService : Service() {
         setInteger(MediaFormat.KEY_FRAME_RATE, fps)
         // Fotogramas clave cuando los pide un visor (y uno de vez en cuando).
         setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 10)
-        // Con la pantalla quieta se repite la imagen: así se afina la nitidez y un fotograma clave pedido llega.
+        // Al quedarse quieta la pantalla se repite la imagen unas veces: así se afina la nitidez.
         setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000)
         if (full) {
             setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
@@ -183,6 +196,7 @@ class ShareService : Service() {
                 if (i < 0) continue
                 val buf = c.getOutputBuffer(i)
                 if (buf != null && info.size > 0) Native.hostFrame(buf, info.offset, info.size, info.flags)
+                if (info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0) lastKey = SystemClock.elapsedRealtime()
                 c.releaseOutputBuffer(i, false)
             }
         }, "kast-codificador").apply { start() }
