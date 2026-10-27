@@ -4,7 +4,7 @@ use crate::net::{self, Identity};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-/// Carpeta y nombre fijados por la app (iOS: su carpeta de documentos y el nombre del dispositivo).
+/// Carpeta y nombre fijados por la app (iOS y Android: su carpeta de datos y el nombre del dispositivo).
 static DIR: OnceLock<PathBuf> = OnceLock::new();
 static NAME: OnceLock<String> = OnceLock::new();
 
@@ -61,12 +61,16 @@ pub fn device_name() -> String {
     }
 }
 
-pub fn platform() -> &'static str { if cfg!(windows) { "windows" } else if cfg!(target_os = "ios") { "ios" } else { "mac" } }
+pub fn platform() -> &'static str {
+    if cfg!(windows) { "windows" } else if cfg!(target_os = "ios") { "ios" } else if cfg!(target_os = "android") { "android" } else { "mac" }
+}
 
 /// Registro de diagnóstico (link.log junto a la configuración; se reinicia con cada arranque del agente).
 pub fn log(msg: &str) {
     use std::io::Write;
     eprintln!("{msg}");
+    #[cfg(target_os = "android")]
+    crate::android::logcat(msg);
     let p = config_dir().join("link.log");
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);

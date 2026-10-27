@@ -1,10 +1,10 @@
 //! Durante una sesión con control: portapapeles compartido (en los dos sentidos) y envío de archivos
 //! (del visor al equipo controlado, arrastrándolos a la ventana).
-//! En iOS sólo se usan el formato de los mensajes y el envío de archivos: su portapapeles lo gestiona la app.
-#![cfg_attr(target_os = "ios", allow(dead_code, unused_imports))]
+//! En iOS y Android sólo se usan el formato de los mensajes y los archivos: su portapapeles lo gestiona la app.
+#![cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code, unused_imports))]
 use crate::net::msg;
 use crate::Res;
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 use crate::platform;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -65,7 +65,7 @@ pub fn png_decode(data: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
 
 // ---------------------------------------------------------------- portapapeles
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 struct ClipState {
     /// Último número de secuencia visto (o puesto por nosotros: no se reenvía).
     seen: u64,
@@ -75,14 +75,14 @@ struct ClipState {
     rx: Option<(u8, usize, Vec<u8>)>,
 }
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 /// Sincroniza el portapapeles con el otro equipo mientras exista.
 pub struct ClipSync {
     st: Arc<Mutex<ClipState>>,
     stop: Arc<AtomicBool>,
 }
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 impl ClipSync {
     /// `send` envía un mensaje al otro equipo (false si la sesión terminó).
     pub fn start(send: impl Fn(Vec<u8>) -> bool + Send + 'static) -> Self {
@@ -151,7 +151,7 @@ impl ClipSync {
     }
 }
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 impl Drop for ClipSync {
     fn drop(&mut self) { self.stop.store(true, Ordering::Relaxed); }
 }
@@ -256,10 +256,15 @@ fn unique(dir: &Path, name: &str) -> String {
     (2..).map(|n| format!("{stem} ({n}){ext}")).find(|c| !dir.join(c).exists()).unwrap()
 }
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 impl FileRecv {
-    pub fn new() -> Self {
-        Self { dir: downloads_dir(), keep: false, open: HashMap::new(), roots: HashMap::new(), first: None, count: 0, bytes: 0 }
+    pub fn new() -> Self { Self::in_dir(downloads_dir()) }
+}
+
+impl FileRecv {
+    /// Recibe en `dir` sin sobrescribir (Android: la carpeta de descargas que elige la app).
+    pub fn in_dir(dir: PathBuf) -> Self {
+        Self { dir, keep: false, open: HashMap::new(), roots: HashMap::new(), first: None, count: 0, bytes: 0 }
     }
 
     /// Recibe en `dir` con los nombres tal cual llegan (sobrescribe lo que ya haya).
@@ -316,7 +321,7 @@ impl FileRecv {
 
 /// Carpeta nueva para los archivos que se sacan arrastrando del otro equipo (en la carpeta temporal; en las
 /// pruebas, dentro de KAST_LINK_HOME). Se borran las de arrastres anteriores de hace más de una hora.
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub fn drag_dir() -> std::io::Result<PathBuf> {
     let base = match std::env::var_os("KAST_LINK_HOME") {
         Some(h) => PathBuf::from(h).join("arrastres"),
@@ -335,14 +340,14 @@ pub fn drag_dir() -> std::io::Result<PathBuf> {
 }
 
 /// Carpeta de descargas (KAST_LINK_DOWNLOADS para pruebas).
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub fn downloads_dir() -> PathBuf {
     if let Some(d) = std::env::var_os("KAST_LINK_DOWNLOADS") { return d.into(); }
     platform::downloads_dir()
 }
 
 /// Muestra lo recibido en el Explorador / Finder (no en las pruebas).
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub fn reveal(p: &Path) {
     if std::env::var_os("KAST_LINK_DOWNLOADS").is_some() { return; }
     #[cfg(windows)]
@@ -374,7 +379,7 @@ mod tests {
         assert_eq!(png_decode(&png).unwrap(), (4, 3, rgba));
     }
 
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
     /// Portapapeles real del sistema: sólo con KAST_TEST_CLIPBOARD=1 (en la CI; aquí sobrescribiría el del usuario).
     #[test]
     fn portapapeles_real() {
@@ -404,7 +409,7 @@ mod tests {
         assert_eq!(clean("nota. "), Some("nota".into()));
     }
 
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
     #[test]
     fn archivos_ida_y_vuelta() {
         let base = std::env::temp_dir().join(format!("kast-share-{}", std::process::id()));
@@ -414,7 +419,7 @@ mod tests {
         std::fs::write(src.join("carpeta/a.txt"), b"hola").unwrap();
         std::fs::write(src.join("carpeta/sub/b.bin"), vec![7u8; 200_000]).unwrap();
         std::fs::create_dir_all(dst.join("carpeta")).unwrap(); // ya existe: se recibe como "carpeta (2)"
-        let mut rx = FileRecv { dir: dst.clone(), keep: false, open: HashMap::new(), roots: HashMap::new(), first: None, count: 0, bytes: 0 };
+        let mut rx = FileRecv::in_dir(dst.clone());
         let mut done = None;
         let (n, bytes) = send_files(&[src.join("carpeta")], &mut |m| { if let Some(d) = rx.on_message(m).unwrap() { done = Some(d); } Ok(()) }, &|_| {}).unwrap();
         assert_eq!((n, bytes), (2, 200_004));

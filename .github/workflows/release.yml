@@ -1,4 +1,4 @@
-# Compila Kast para Windows y macOS en cada push/PR y publica un Release al subir una etiqueta v*
+# Compila Kast para Windows, macOS, iOS y Android en cada push/PR y publica un Release al subir una etiqueta v*
 # (p. ej. v1.1.0). Las versiones con guion (v1.1.0-beta.1) se publican como prerelease.
 name: Build & Release
 
@@ -254,9 +254,53 @@ jobs:
           cargo check --release --locked --lib --manifest-path link/Cargo.toml --target aarch64-apple-ios
           DEVELOPER_DIR="$(xcode-select -p)" bash ios/build.sh sim
 
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # Firma de publicación si el repositorio tiene los secretos (si no, la de depuración del runner).
+      - name: Almacén de claves
+        env:
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE" ]; then echo "::notice::sin almacén de claves: firma de depuración"; exit 0; fi
+          printf '%s' "$ANDROID_KEYSTORE" | base64 --decode > "$RUNNER_TEMP/kast.jks"
+          echo "KAST_ANDROID_KEYSTORE=$RUNNER_TEMP/kast.jks" >> "$GITHUB_ENV"
+
+      - name: Compilar la app de Android
+        env:
+          KAST_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KAST_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+          if [ "$GITHUB_REF_TYPE" = tag ]; then V="${GITHUB_REF_NAME#v}"; else V="dev-${GITHUB_SHA::7}"; fi
+          (cd android && ./gradlew assembleRelease --no-daemon -PkastVersion="$V" -PkastVersionCode="$GITHUB_RUN_NUMBER")
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          # Las tres arquitecturas del núcleo dentro del paquete.
+          unzip -l "$APK" | grep -E "lib/(arm64-v8a|armeabi-v7a|x86_64)/libkast_link.so"
+          test "$(unzip -l "$APK" | grep -c libkast_link.so)" = 3
+          NAME="Kast-$V-android"
+          mkdir -p dist
+          cp "$APK" "dist/$NAME.apk"
+          (cd dist && sha256sum "$NAME.apk" > "$NAME.apk.sha256")
+          echo "PKG=$NAME" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG }}
+          path: |
+            dist/${{ env.PKG }}.apk
+            dist/${{ env.PKG }}.apk.sha256
+
   release:
     if: github.ref_type == 'tag'
-    needs: [windows, macos]
+    needs: [windows, macos, android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

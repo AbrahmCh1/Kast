@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="control_label">Kast (control remoto)</string>
+    <string name="control_desc">Permite que los equipos a los que das acceso en Kast controlen esta pantalla con su teclado y su ratón: los clics se convierten en toques, la rueda en desplazamientos y el texto se escribe en el campo activo. Sólo actúa durante una sesión de Kast que hayas aceptado (o con tu contraseña de acceso desatendido o un dispositivo emparejado).</string>
+</resources>

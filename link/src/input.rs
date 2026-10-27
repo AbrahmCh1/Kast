@@ -73,9 +73,10 @@ impl Event {
 }
 
 /// Entre Windows y Mac se intercambian Ctrl y ⌘ para que los atajos se escriban igual
-/// (Ctrl+C en Windows → ⌘C en Mac y al revés). iOS usa los modificadores de Apple, como macOS.
+/// (Ctrl+C en Windows → ⌘C en Mac y al revés). iOS usa los modificadores de Apple, como macOS; Android, Ctrl,
+/// como Windows.
 pub fn map_modifier(code: &str, viewer: &str, host: &str) -> String {
-    fn family(p: &str) -> &str { if p == "ios" { "mac" } else { p } }
+    fn family(p: &str) -> &str { match p { "ios" => "mac", "android" => "windows", p => p } }
     if family(viewer) == family(host) || viewer.is_empty() { return code.to_string(); }
     match code {
         "ControlLeft" => "SuperLeft",
@@ -110,5 +111,9 @@ mod tests {
         // iOS tiene los modificadores de Apple: igual que un Mac.
         assert_eq!(map_modifier("SuperLeft", "ios", "mac"), "SuperLeft");
         assert_eq!(map_modifier("SuperLeft", "ios", "windows"), "ControlLeft");
+        // Android usa Ctrl para los atajos, como Windows.
+        assert_eq!(map_modifier("ControlLeft", "windows", "android"), "ControlLeft");
+        assert_eq!(map_modifier("SuperLeft", "mac", "android"), "ControlLeft");
+        assert_eq!(map_modifier("ControlLeft", "android", "mac"), "SuperLeft");
     }
 }

@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kast · Control de monitores y de tus equipos</title>
-<meta name="description" content="Brillo, contraste, entradas y disposiciones de tus monitores en Windows y macOS. Con Kast Link ves y controlas tus otros equipos desde otro monitor o desde tu iPhone. Gratis y de código abierto.">
+<meta name="description" content="Brillo, contraste, entradas y disposiciones de tus monitores en Windows y macOS. Con Kast Link ves y controlas tus otros equipos desde otro monitor, desde tu iPhone o desde Android. Gratis y de código abierto.">
 <meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#202020" media="(prefers-color-scheme: dark)">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Kast">
-<meta property="og:description" content="Tus monitores y tus equipos, desde un solo lugar. Windows, macOS, iPhone y iPad. Gratis y de código abierto.">
+<meta property="og:description" content="Tus monitores y tus equipos, desde un solo lugar. Windows, macOS, iPhone, iPad y Android. Gratis y de código abierto.">
 <meta property="og:image" content="https://raw.githubusercontent.com/AbrahmCh1/Kast/main/assets/kast-1024.png">
 <meta name="twitter:card" content="summary">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
@@ -242,7 +242,7 @@ select:disabled { opacity: .45; }
 .stat span { color: var(--sub); font-size: 13.5px; }
 
 /* descargas */
-.dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 36px; }
+.dl { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 36px; }
 .dl .card { padding: 22px; display: flex; flex-direction: column; gap: 10px; }
 .dl .card.rec { border-color: color-mix(in srgb, var(--accent) 55%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent); }
 .dl .os { display: flex; align-items: center; gap: 12px; }
@@ -300,6 +300,7 @@ footer .links { margin-left: auto; display: flex; gap: 18px; flex-wrap: wrap; }
   <symbol id="i-clone" viewBox="0 0 24 24"><rect x="3" y="3" width="13" height="10" rx="1.5"/><rect x="8" y="9" width="13" height="10" rx="1.5"/></symbol>
   <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5zM8 3v5h7V3M8 21v-7h8v7"/></symbol>
   <symbol id="i-term" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M12 15h5"/></symbol>
+  <symbol id="i-android" viewBox="0 0 24 24"><path d="M4.5 17.5v-5a7.5 7.5 0 0 1 15 0v5z"/><path d="M8 6.2 6.3 3.8M16 6.2l1.7-2.4M9.2 11.3h.01M14.8 11.3h.01"/></symbol>
   <symbol id="i-phone" viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.2"/><path d="M11 18.5h2"/></symbol>
   <symbol id="i-devices" viewBox="0 0 24 24"><rect x="2" y="4" width="14" height="10" rx="1.5"/><path d="M6 18h6M9 14v4"/><rect x="17" y="8" width="5" height="11" rx="1.2"/></symbol>
   <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
@@ -335,12 +336,12 @@ footer .links { margin-left: auto; display: flex; gap: 18px; flex-wrap: wrap; }
   <div class="wrap">
     <a class="eyebrow" href="#link"><span class="pill">Nuevo</span>Kast Link: pantallas virtuales</a>
     <h1>Tus monitores y tus equipos, desde un solo lugar.</h1>
-    <p class="lead">Brillo, contraste, entradas y disposiciones para todos tus monitores. Y con Kast Link, ve y controla tus otros equipos desde cualquier pantalla o desde tu iPhone.</p>
+    <p class="lead">Brillo, contraste, entradas y disposiciones para todos tus monitores. Y con Kast Link, ve y controla tus otros equipos desde cualquier pantalla, desde tu iPhone o desde Android.</p>
     <div class="btns">
       <a class="btn primary lg" id="heroDl" href="#descargar"><svg class="i"><use href="#i-dl"/></svg><span>Descargar</span></a>
       <a class="btn lg" href="https://github.com/AbrahmCh1/Kast"><svg class="i"><use href="#i-gh"/></svg>Ver en GitHub</a>
     </div>
-    <div class="meta"><span id="heroVer">Gratis y de código abierto (MIT)</span> · Windows 10/11 · macOS 12+ · iPhone y iPad</div>
+    <div class="meta"><span id="heroVer">Gratis y de código abierto (MIT)</span> · Windows 10/11 · macOS 12+ · iPhone y iPad · Android 8+</div>
 
     <div class="shot">
       <div class="window" role="group" aria-label="Demostración de la ventana de Kast">
@@ -538,6 +539,12 @@ footer .links { margin-left: auto; display: flex; gap: 18px; flex-wrap: wrap; }
         <p>Se instala desde un Mac con Xcode, con el código del repositorio. Las instrucciones están en el README.</p>
         <div class="btns"><a class="btn" href="https://github.com/AbrahmCh1/Kast#ios-iphone-y-ipad"><svg class="i"><use href="#i-gh"/></svg>Instrucciones</a></div>
         <div class="size">Código en la carpeta ios/ del repositorio</div>
+      </div>
+      <div class="card" data-os="android">
+        <div class="os"><svg class="i"><use href="#i-android"/></svg><h4>Android</h4></div>
+        <p>Android 8 o posterior. Ve y controla tus equipos; en tabletas y pantallas interactivas, comparte también su pantalla para controlarla desde tu PC.</p>
+        <div class="btns"><a class="btn primary" data-dl="-android.apk" href="https://github.com/AbrahmCh1/Kast/releases/latest"><svg class="i"><use href="#i-dl"/></svg>Descargar .apk</a></div>
+        <div class="size" data-size="-android.apk"></div>
       </div>
     </div>
     <p class="rel" id="rel">Todas las versiones y sus notas en <a href="https://github.com/AbrahmCh1/Kast/releases">GitHub Releases</a>.</p>

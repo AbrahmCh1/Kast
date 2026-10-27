@@ -1,5 +1,6 @@
 //! Núcleo de Kast Link: protocolo cifrado, descubrimiento, vídeo y entrada. Lo usan el binario
-//! `kast-link` (agente de escritorio en Windows y macOS) y la app de iOS (biblioteca estática, ver mobile.rs).
+//! `kast-link` (agente de escritorio en Windows y macOS), la app de iOS (biblioteca estática, ver mobile.rs) y la
+//! de Android (biblioteca dinámica con JNI, ver android/).
 pub mod access;
 pub mod discovery;
 pub mod h264;
@@ -9,15 +10,20 @@ pub mod share;
 pub mod store;
 pub mod virt;
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub mod agent;
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub mod stream;
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub mod viewer;
 
-/// Cliente de la app de iOS (Rust puro: también se compila en escritorio para probarlo con `kast-link probe`).
+/// Cliente de las apps de iOS y Android (Rust puro: también se compila en escritorio para probarlo con
+/// `kast-link probe`).
 pub mod mobile;
+
+/// App de Android: puente JNI y anfitrión (compartir la pantalla de una pantalla interactiva o tableta).
+#[cfg(target_os = "android")]
+pub mod android;
 
 #[cfg(target_os = "macos")]
 pub mod mac;

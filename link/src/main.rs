@@ -6,7 +6,7 @@
 //!   kast-link id                                    nombre e identidad de este equipo
 //!   kast-link record [-m N | --pattern] [--frames 120] <archivo>   grabar un flujo H.264 (pruebas)
 //!   kast-link play <archivo> [--dump imagen.bmp]                   decodificar un flujo grabado (pruebas)
-//!   kast-link probe <ip:puerto> [--home dir] [--secs 10] [--text t] [--clip t] [--password p | --pair código]
+//!   kast-link probe <ip:puerto> [--home dir] [--secs 10] [--text t] [--clip t] [--wheel x,y,dy] [--password p | --pair código]
 //!                                                   cliente de iOS desde la terminal (pruebas)
 //!   kast-link vdisplay <ancho> <alto> [--scale 200] [--at x,y] [--secs 5]   crear un momento una pantalla virtual (pruebas)
 use kast_link::{Res, agent, mobile, platform, store, stream};
@@ -196,6 +196,14 @@ fn probe(o: &Opts) -> Res<()> {
                 sent = true;
                 if let Some(t) = o.get(&["--text"]) { let t = CString::new(t)?; unsafe { mobile::kl_text(s, t.as_ptr()) }; }
                 if let Some(t) = o.get(&["--clip"]) { let t = CString::new(t)?; unsafe { mobile::kl_clip_text(s, t.as_ptr()) }; }
+                // Rueda en un punto (p. ej. para comprobar el control de un Android: se convierte en un gesto).
+                if let Some(w) = o.get(&["--wheel"]) {
+                    let v: Vec<i32> = w.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                    if let [x, y, dy] = v[..] {
+                        mobile::kl_mouse_move(s, x, y);
+                        mobile::kl_wheel(s, 0, dy);
+                    }
+                }
             }
         }
     }

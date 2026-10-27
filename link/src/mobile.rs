@@ -1,5 +1,6 @@
-//! Cliente de Kast Link para la app de iOS: descubre equipos, se conecta (con código y control) y entrega el
-//! vídeo a Swift en AVCC. API en C (ver ios/Kast/kastlink.h); los eventos llegan a la app como JSON.
+//! Cliente de Kast Link para las apps de iOS y Android: descubre equipos, se conecta (con código y control) y
+//! entrega el vídeo a la app (AVCC para iOS, Annex B para MediaCodec en Android). API en C para iOS (ver
+//! ios/Kast/kastlink.h) y en Rust para el puente JNI de Android; los eventos llegan a la app como JSON.
 //!
 //! Eventos (callback `ev`, desde hilos en segundo plano):
 //!   {"ev":"devices","devices":[{"id","name","platform","addr","online","sharing","known","displays":[[w,h]…]}]}
@@ -51,7 +52,8 @@ struct Client {
     me: Identity,
     name: String,
     devices: Mutex<HashMap<String, Dev>>,
-    saved: Mutex<Vec<Saved>>,
+    /// Compartidos con el anfitrión de Android (mismo archivo de dispositivos).
+    pub(crate) saved: Mutex<Vec<Saved>>,
     sessions: Mutex<HashMap<u64, Sess>>,
     /// Grupo de conexiones por dispositivo: cambiar de pantalla no vuelve a pedir permiso (ver agent.rs, Grant).
     groups: Mutex<HashMap<String, String>>,
@@ -60,6 +62,8 @@ struct Client {
     ctx: Ctx,
     ev: EventCb,
     frame: FrameCb,
+    /// Fotogramas en Annex B con SPS/PPS dentro (MediaCodec) en vez de AVCC.
+    annexb: bool,
 }
 
 static CLIENT: OnceLock<Arc<Client>> = OnceLock::new();
@@ -81,7 +85,9 @@ impl Client {
         let devs = self.devices.lock().unwrap();
         let saved = self.saved.lock().unwrap();
         let known = |id: &str| saved.iter().any(|s| !s.key.is_empty() && crate::net::id_of(&crate::net::unhex(&s.key).unwrap_or_default()) == id);
-        let mut list: Vec<Value> = devs.iter().map(|(id, d)| json!({
+        // En Android este mismo equipo también se anuncia (si comparte su pantalla): no se lista.
+        let me = self.me.id();
+        let mut list: Vec<Value> = devs.iter().filter(|(id, _)| **id != me).map(|(id, d)| json!({
             "id": id, "name": d.name, "platform": d.platform, "addr": d.addr.to_string(),
             "online": d.seen.elapsed() < ONLINE, "sharing": d.sharing, "known": known(id), "short_id": crate::net::short_id(id),
             "displays": d.displays.iter().map(|(w, h)| json!([w, h])).collect::<Vec<_>>(),
@@ -224,7 +230,9 @@ impl Client {
         let group = self.groups.lock().unwrap().entry(id.to_string())
             .or_insert_with(|| { let mut b = [0u8; 12]; let _ = getrandom::fill(&mut b); crate::net::hex(&b) }).clone();
         let count = self.devices.lock().unwrap().get(id).map(|d| d.displays.len()).unwrap_or(0).max(monitor);
-        let req = json!({"name": self.name, "platform": "ios", "monitor": monitor, "monitors": (1..=count).collect::<Vec<_>>(),
+        // En escritorio (`kast-link probe`) se hace pasar por la app de iOS.
+        let platform = if cfg!(target_os = "android") { "android" } else { "ios" };
+        let req = json!({"name": self.name, "platform": platform, "monitor": monitor, "monitors": (1..=count).collect::<Vec<_>>(),
                          "all_monitors": true, "group": group, "control": control, "auth": auth.map(|(k, _)| k.as_str())}).to_string();
         ch.send_typed(msg::REQUEST, req.as_bytes())?;
         let mut m = Vec::new();
@@ -299,13 +307,18 @@ impl Client {
         }
     }
 
-    /// Annex B -> AVCC + SPS/PPS para AVSampleBufferDisplayLayer (con el SPS ajustado a latencia mínima).
+    /// Annex B -> AVCC + SPS/PPS para AVSampleBufferDisplayLayer (con el SPS ajustado a latencia mínima). Para
+    /// MediaCodec (Android) se entrega el Annex B tal cual, con SPS/PPS dentro (y aparte, para saber que es clave).
     fn deliver(&self, session: u64, annexb: &[u8]) {
         let fixed = h264::low_latency_annexb(annexb);
         let data = fixed.as_deref().unwrap_or(annexb);
         let nals = h264::nal_units(data);
         let sps = nals.iter().find(|n| h264::nal_type(n) == h264::NAL_SPS).copied().unwrap_or(&[]);
         let pps = nals.iter().find(|n| h264::nal_type(n) == h264::NAL_PPS).copied().unwrap_or(&[]);
+        if self.annexb {
+            (self.frame)(self.ctx.0, session, data.as_ptr(), data.len(), sps.as_ptr(), sps.len(), pps.as_ptr(), pps.len());
+            return;
+        }
         // Sin SPS/PPS ni delimitadores de acceso (9): sólo los cortes del fotograma.
         let avcc = h264::to_avcc(nals.iter().copied().filter(|n| !matches!(h264::nal_type(n), h264::NAL_SPS | h264::NAL_PPS | 9)));
         if avcc.is_empty() { return; }
@@ -377,26 +390,25 @@ fn base64(d: &[u8]) -> String {
     s
 }
 
-// ---------------------------------------------------------------- API en C
+// ---------------------------------------------------------------- API (Rust para Android, en C para iOS)
 
 fn client() -> Option<&'static Arc<Client>> { CLIENT.get() }
 
-unsafe fn cstr(p: *const c_char) -> String {
-    if p.is_null() { return String::new(); }
-    unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
-}
+/// Equipos recordados (los comparte el anfitrión de Android: es el mismo archivo).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn saved() -> Option<&'static Mutex<Vec<Saved>>> { client().map(|c| &c.saved) }
 
 /// Arranca el cliente: `dir` para la identidad y los equipos recordados, `name` el nombre del dispositivo.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kl_start(dir: *const c_char, name: *const c_char, ctx: *mut c_void, ev: EventCb, frame: FrameCb) -> bool {
+/// `annexb`: los fotogramas se entregan en Annex B (MediaCodec, Android) en vez de AVCC (iOS).
+pub fn start(dir: String, name: String, ctx: *mut c_void, ev: EventCb, frame: FrameCb, annexb: bool) -> bool {
     if CLIENT.get().is_some() { return true; }
-    let (dir, name) = unsafe { (cstr(dir), cstr(name)) };
     store::set_config(dir.into(), name.clone());
     let Ok(udp) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)) else { return false };
     let _ = udp.set_broadcast(true);
     let c = Arc::new(Client {
         me: store::identity(), name, devices: Mutex::new(HashMap::new()), saved: Mutex::new(store::load_devices()),
         sessions: Mutex::new(HashMap::new()), groups: Mutex::new(HashMap::new()), next: AtomicU64::new(0), udp, ctx: Ctx(ctx), ev, frame,
+        annexb,
     });
     let _ = CLIENT.set(c.clone());
     { let c = c.clone(); std::thread::spawn(move || c.receive_loop()); }
@@ -406,10 +418,9 @@ pub unsafe extern "C" fn kl_start(dir: *const c_char, name: *const c_char, ctx: 
 }
 
 /// Comandos en JSON: {"cmd":"refresh"}, {"cmd":"add","addr"}, {"cmd":"forget","id"}, {"cmd":"disconnect","session"}.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kl_command(json: *const c_char) {
+pub fn command(json: &str) {
     let Some(c) = client() else { return };
-    let Ok(v) = serde_json::from_str::<Value>(&unsafe { cstr(json) }) else { return };
+    let Ok(v) = serde_json::from_str::<Value>(json) else { return };
     let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     match s("cmd").as_str() {
         "refresh" => { c.sweep(); c.emit_devices(); }
@@ -421,75 +432,99 @@ pub unsafe extern "C" fn kl_command(json: *const c_char) {
 }
 
 /// Conecta con un equipo (`id` del anuncio, su ID de 9 dígitos o "ip:addr:puerto"); devuelve el número de sesión.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kl_connect(id: *const c_char, monitor: u32, control: bool) -> u64 {
+/// `auth`: ("password", contraseña de acceso desatendido) o ("pair", código de emparejamiento). El secreto no se
+/// envía: sólo una prueba ligada a la conexión.
+pub fn connect(id: &str, monitor: u32, control: bool, auth: Option<(String, String)>) -> u64 {
     let Some(c) = client() else { return 0 };
-    c.connect(&unsafe { cstr(id) }, monitor.max(1) as usize, control, None)
+    let auth = auth.filter(|(k, _)| k == access::PASSWORD || k == access::PAIR);
+    c.connect(id, monitor.max(1) as usize, control, auth)
 }
 
-/// Como kl_connect, con la contraseña de acceso desatendido (`auth` = "password") o un código de
-/// emparejamiento (`auth` = "pair"). El secreto no se envía: sólo una prueba ligada a la conexión.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kl_connect_auth(id: *const c_char, monitor: u32, control: bool, auth: *const c_char, secret: *const c_char) -> u64 {
-    let Some(c) = client() else { return 0 };
-    let (auth, secret) = unsafe { (cstr(auth), cstr(secret)) };
-    let auth = (auth == access::PASSWORD || auth == access::PAIR).then_some((auth, secret));
-    c.connect(&unsafe { cstr(id) }, monitor.max(1) as usize, control, auth)
+/// Mensaje hacia el otro equipo de una sesión (teclado, ratón, petición de fotograma clave).
+pub fn send(session: u64, m: Vec<u8>) {
+    if let Some(c) = client() { c.send(session, m); }
 }
 
-/// Pide al otro equipo un fotograma clave (al abrir la vista o si el decodificador falló).
-#[unsafe(no_mangle)]
-pub extern "C" fn kl_keyframe(session: u64) {
-    if let Some(c) = client() { c.send(session, vec![msg::KEYFRAME]); }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn kl_mouse_move(session: u64, x: i32, y: i32) {
-    if let Some(c) = client() { c.send(session, Event::Move { x, y }.encode()); }
-}
-
-/// Botón: 0 izquierdo, 1 derecho, 2 central.
-#[unsafe(no_mangle)]
-pub extern "C" fn kl_mouse_button(session: u64, button: u8, down: bool, x: i32, y: i32) {
-    if let Some(c) = client() { c.send(session, Event::Button { button, down, x, y }.encode()); }
-}
-
-/// Rueda en 1/120 de muesca (120 = una línea).
-#[unsafe(no_mangle)]
-pub extern "C" fn kl_wheel(session: u64, dx: i32, dy: i32) {
-    if let Some(c) = client() { c.send(session, Event::Wheel { dx, dy }.encode()); }
-}
-
-/// Tecla física por su nombre W3C (`KeyA`, `Escape`, `ControlLeft`…).
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kl_key(session: u64, code: *const c_char, down: bool) {
-    if let Some(c) = client() { c.send(session, Event::Key { down, code: unsafe { cstr(code) } }.encode()); }
-}
-
-/// Texto escrito con el teclado de iOS.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kl_text(session: u64, text: *const c_char) {
-    let Some(c) = client() else { return };
-    let text = unsafe { cstr(text) };
-    let mut rest = text.as_str();
+/// Texto escrito con el teclado del móvil (troceado si es largo).
+pub fn text(session: u64, text: &str) {
+    let mut rest = text;
     while !rest.is_empty() {
         let mut end = rest.len().min(MAX_TEXT);
         while !rest.is_char_boundary(end) { end -= 1; }
-        c.send(session, Event::Text { text: rest[..end].to_string() }.encode());
+        send(session, Event::Text { text: rest[..end].to_string() }.encode());
         rest = &rest[end..];
     }
 }
 
+/// Portapapeles hacia el otro equipo: 1 = texto UTF-8, 2 = PNG.
+pub fn clip(session: u64, kind: u8, data: &[u8]) {
+    if let Some(c) = client() { c.send_clip(session, kind, data); }
+}
+
+// ---------------------------------------------------------------- API en C (iOS)
+
+unsafe fn cstr(p: *const c_char) -> String {
+    if p.is_null() { return String::new(); }
+    unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kl_start(dir: *const c_char, name: *const c_char, ctx: *mut c_void, ev: EventCb, frame: FrameCb) -> bool {
+    let (dir, name) = unsafe { (cstr(dir), cstr(name)) };
+    start(dir, name, ctx, ev, frame, false)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kl_command(json: *const c_char) { command(&unsafe { cstr(json) }) }
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kl_connect(id: *const c_char, monitor: u32, control: bool) -> u64 {
+    connect(&unsafe { cstr(id) }, monitor, control, None)
+}
+
+/// Como kl_connect, con la contraseña de acceso desatendido (`auth` = "password") o un código de
+/// emparejamiento (`auth` = "pair").
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kl_connect_auth(id: *const c_char, monitor: u32, control: bool, auth: *const c_char, secret: *const c_char) -> u64 {
+    let (auth, secret) = unsafe { (cstr(auth), cstr(secret)) };
+    connect(&unsafe { cstr(id) }, monitor, control, Some((auth, secret)))
+}
+
+/// Pide al otro equipo un fotograma clave (al abrir la vista o si el decodificador falló).
+#[unsafe(no_mangle)]
+pub extern "C" fn kl_keyframe(session: u64) { send(session, vec![msg::KEYFRAME]) }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kl_mouse_move(session: u64, x: i32, y: i32) { send(session, Event::Move { x, y }.encode()) }
+
+/// Botón: 0 izquierdo, 1 derecho, 2 central.
+#[unsafe(no_mangle)]
+pub extern "C" fn kl_mouse_button(session: u64, button: u8, down: bool, x: i32, y: i32) {
+    send(session, Event::Button { button, down, x, y }.encode())
+}
+
+/// Rueda en 1/120 de muesca (120 = una línea).
+#[unsafe(no_mangle)]
+pub extern "C" fn kl_wheel(session: u64, dx: i32, dy: i32) { send(session, Event::Wheel { dx, dy }.encode()) }
+
+/// Tecla física por su nombre W3C (`KeyA`, `Escape`, `ControlLeft`…).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kl_key(session: u64, code: *const c_char, down: bool) {
+    send(session, Event::Key { down, code: unsafe { cstr(code) } }.encode())
+}
+
+/// Texto escrito con el teclado de iOS.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kl_text(session: u64, t: *const c_char) { text(session, &unsafe { cstr(t) }) }
+
 /// Envía el portapapeles de iOS al otro equipo (texto UTF-8 o PNG).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn kl_clip_text(session: u64, text: *const c_char) {
-    if let Some(c) = client() { c.send_clip(session, 1, unsafe { cstr(text) }.as_bytes()); }
-}
+pub unsafe extern "C" fn kl_clip_text(session: u64, text: *const c_char) { clip(session, 1, unsafe { cstr(text) }.as_bytes()) }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kl_clip_png(session: u64, data: *const u8, len: usize) {
     if data.is_null() { return; }
-    if let Some(c) = client() { c.send_clip(session, 2, unsafe { std::slice::from_raw_parts(data, len) }); }
+    clip(session, 2, unsafe { std::slice::from_raw_parts(data, len) })
 }
 
 #[cfg(test)]

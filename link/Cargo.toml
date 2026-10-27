@@ -20,10 +20,14 @@ serde_json = "1.0.154"
 snow = { version = "0.10.0", default-features = false, features = ["default-resolver", "use-curve25519", "use-chacha20poly1305", "use-blake2", "use-getrandom"] }
 socket2 = { version = "0.6.5", features = ["all"] }
 
-# Ventanas del visor (escritorio; en iOS las pone la app).
-[target.'cfg(not(target_os = "ios"))'.dependencies]
+# Ventanas del visor (escritorio; en iOS y Android las pone la app).
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 softbuffer = "0.4.8"
 winit = "0.30.13"
+
+# App de Android: puente JNI con Kotlin (android/).
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [

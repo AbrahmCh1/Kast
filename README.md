@@ -2,9 +2,9 @@
 
 <h1 align="center">Kast</h1>
 
-<p align="center">Control de monitores para <b>Windows</b> y <b>macOS</b>: brillo, contraste, entradas, resolución y disposición,<br>desde la bandeja o la barra de menús, con atajos globales y una interfaz moderna.<br>Y con <b>Kast Link</b>, ve y controla tus otros equipos desde cualquiera de tus monitores o desde el <b>iPhone y el iPad</b>, cifrado y por la red local.</p>
+<p align="center">Control de monitores para <b>Windows</b> y <b>macOS</b>: brillo, contraste, entradas, resolución y disposición,<br>desde la bandeja o la barra de menús, con atajos globales y una interfaz moderna.<br>Y con <b>Kast Link</b>, ve y controla tus otros equipos desde cualquiera de tus monitores, desde el <b>iPhone y el iPad</b> o desde <b>Android</b>, cifrado y por la red local.</p>
 
-<p align="center"><a href="https://github.com/AbrahmCh1/Kast/releases">Descargar</a> · <a href="#windows">Windows</a> · <a href="#macos">macOS</a> · <a href="#kast-link">Kast Link</a> · <a href="#ios-iphone-y-ipad">iOS</a></p>
+<p align="center"><a href="https://github.com/AbrahmCh1/Kast/releases">Descargar</a> · <a href="#windows">Windows</a> · <a href="#macos">macOS</a> · <a href="#kast-link">Kast Link</a> · <a href="#ios-iphone-y-ipad">iOS</a> · <a href="#android">Android</a></p>
 
 <p align="center"><img src="assets/screenshot.png" width="760" alt="Interfaz de Kast"></p>
 
@@ -27,6 +27,7 @@
 - **Portapapeles compartido** (texto e imágenes), **archivos arrastrando** en los dos sentidos (a la ventana para enviarlos; desde el Finder del Mac que ves en Windows, hasta tu escritorio, para traerlos) y **atajos del sistema** (`Win`, `Alt+Tab`…) hacia el otro equipo.
 - **Acceso:** ID de 9 dígitos por equipo, emparejamiento con código de un solo uso, acceso desatendido con contraseña y lista de dispositivos con acceso.
 - **[App para iPhone y iPad](#ios-iphone-y-ipad)** con modo trackpad, modo táctil y teclado completo.
+- **[App para Android](#android)**: ve y controla tus equipos y, en **pantallas grandes** (tabletas y pantallas interactivas), comparte la suya para controlarla desde tu PC o Mac.
 - Cifrado de extremo a extremo (Noise XX), sin servidores ni cuentas.
 
 # Windows
@@ -150,7 +151,7 @@ Sin más, la app se firma *ad hoc*. Para firmarla con tu certificado (Hardened R
 
 # Kast Link
 
-Ver y **controlar** otro equipo (como AnyDesk) en uno de tus monitores, por la red local y **cifrado**. Windows y macOS se entienden entre sí: cualquiera puede compartir y cualquiera puede ver, y desde iOS se puede ver y controlar. Es la base de un sistema para unificar varios equipos y asignar pantallas de uno a otro.
+Ver y **controlar** otro equipo (como AnyDesk) en uno de tus monitores, por la red local y **cifrado**. Windows y macOS se entienden entre sí: cualquiera puede compartir y cualquiera puede ver; desde iOS y Android se puede ver y controlar, y una tableta o pantalla interactiva Android también se puede compartir. Es la base de un sistema para unificar varios equipos y asignar pantallas de uno a otro.
 
 ## Conectar
 
@@ -221,16 +222,17 @@ Para que no haya que aceptar nada al aplicarla, empareja el dispositivo o marca 
 - **Windows:** el del firewall (puertos 47800 TCP y 47801 UDP, redes privadas). Las ventanas de administrador y los avisos de UAC no aceptan el control remoto, igual que en otras herramientas sin servicio del sistema.
 - **Mac:** **Red local** (para encontrar otros equipos), **Grabación de pantalla** (para compartir) y **Accesibilidad** (para que te controlen). Si falta alguno, Kast → Dispositivos muestra «Dar permiso».
 - **iPhone y iPad:** **Red local** (para encontrar tus equipos).
+- **Android (pantallas grandes, para compartir):** el de **captura de pantalla** (al pulsar Compartir), **Accesibilidad → Kast (control remoto)** (para que te controlen), **Mostrar sobre otras apps** (para aceptar conexiones con Kast en segundo plano) y **Notificaciones**.
 
 ## Cómo funciona
 
-| | Windows | macOS |
-|---|---|---|
-| Captura | DXGI Desktop Duplication | ScreenCaptureKit (NV12 directo de la GPU) |
-| H.264 | Media Foundation | VideoToolbox (hardware) |
-| Formato en la red | Annex B | AVCC ↔ Annex B, con el SPS ajustado a latencia mínima |
-| Teclado y ratón | `SendInput` (códigos de escaneo y Unicode) | `CGEvent` (con permiso de Accesibilidad) |
-| Pantallas virtuales | Controlador de Parsec (IddCx) por `DeviceIoControl`, colocadas con `SetDisplayConfig` | `CGVirtualDisplay`, colocadas con `CGConfigureDisplayOrigin` |
+| | Windows | macOS | Android (compartir) |
+|---|---|---|---|
+| Captura | DXGI Desktop Duplication | ScreenCaptureKit (NV12 directo de la GPU) | MediaProjection en una pantalla virtual que dibuja en el codificador |
+| H.264 | Media Foundation | VideoToolbox (hardware) | MediaCodec (hardware), hasta 1080p a 30 fps |
+| Formato en la red | Annex B | AVCC ↔ Annex B, con el SPS ajustado a latencia mínima | Annex B, con SPS/PPS en cada fotograma clave |
+| Teclado y ratón | `SendInput` (códigos de escaneo y Unicode) | `CGEvent` (con permiso de Accesibilidad) | Servicio de Accesibilidad: gestos (`dispatchGesture`) y el campo de texto activo (Android 13+) |
+| Pantallas virtuales | Controlador de Parsec (IddCx) por `DeviceIoControl`, colocadas con `SetDisplayConfig` | `CGVirtualDisplay`, colocadas con `CGConfigureDisplayOrigin` | — |
 
 | Medido en red local (1080p, 60 fps) | |
 |---|---|
@@ -240,8 +242,8 @@ Para que no haya que aceptar nada al aplicarla, empareja el dispositivo o marca 
 | Ancho de banda (escritorio) | 2-5 Mbps; hasta 20 Mbps con vídeo |
 
 - **Seguridad:** cada equipo tiene una identidad propia (X25519) y la conexión usa Noise XX (autenticación mutua + ChaCha20-Poly1305). El equipo que comparte siempre decide quién entra: aceptando cada petición, o dejando entrar a los dispositivos que emparejó o a quien conozca su contraseña de acceso desatendido. Si la identidad de un dispositivo conocido cambia, la conexión se bloquea.
-- **Descubrimiento:** cada equipo se anuncia por UDP (difusión) y responde a consultas directas, que es como lo encuentra la app de iOS.
-- **Arquitectura:** el núcleo (`link/`) es una biblioteca en Rust. En escritorio, la app arranca `kast-link agent`, que se comunica con ella por stdin/stdout (una línea JSON por mensaje) y abre las ventanas del visor. En iOS, la misma biblioteca se enlaza en la app (`link/src/mobile.rs`).
+- **Descubrimiento:** cada equipo se anuncia por UDP (difusión) y responde a consultas directas, que es como lo encuentran las apps de iOS y Android.
+- **Arquitectura:** el núcleo (`link/`) es una biblioteca en Rust. En escritorio, la app arranca `kast-link agent`, que se comunica con ella por stdin/stdout (una línea JSON por mensaje) y abre las ventanas del visor. En iOS, la misma biblioteca se enlaza en la app (`link/src/mobile.rs`); en Android, como biblioteca JNI (`link/src/android/`), que además comparte la pantalla.
 - **Todo nativo:** las APIs de captura, vídeo y entrada que ya trae cada sistema, sin códecs ni librerías externas.
 - **Hoja de ruta:** conectarse desde fuera de casa (servidor de encuentro y relé, y después conexión directa), cruce transparente del ratón entre monitores de distintos equipos, atajos del sistema también desde un visor en Mac (`Cmd+Tab`…) y recibir archivos desde un visor en Mac.
 
@@ -278,9 +280,36 @@ Usa el núcleo de Kast Link en Rust como biblioteca estática (`link/src/mobile.
 
 Para el simulador: `bash ios/build.sh sim`.
 
+# Android
+
+App para **ver y controlar tus equipos** con Kast desde un teléfono o una tableta Android y, en **pantallas grandes** (tabletas y pantallas interactivas), para **compartir la suya**: aparece en Kast → Dispositivos de tu PC o Mac como un equipo más y la ves y controlas desde allí.
+
+**Compartir esta pantalla** (pantallas grandes, columna «Esta pantalla»):
+
+1. Pulsa **Compartir esta pantalla** → **Empezar ahora** (permiso de captura de Android). Mientras comparte hay un aviso fijo con «Dejar de compartir»; el codificador sólo trabaja mientras alguien está viendo.
+2. En **Permisos**, **Activar** el control: Accesibilidad → **Kast (control remoto)**. Y **Avisos de conexión encima de otras apps**, para que la petición aparezca aunque Kast esté en segundo plano y para que vuelva a compartir sola al encender la pantalla.
+3. En tu PC o Mac: Kast → Dispositivos → la pantalla → **Controlar**, y acepta en ella comprobando el código. Igual que en el escritorio, hay **emparejamiento** con código de un solo uso, **acceso desatendido** con contraseña, **rechazar desconocidos** y la lista de **dispositivos con acceso**.
+
+Al controlarla:
+- el ratón se convierte en gestos: clic = toque (mantenido = pulsación larga), arrastrar = deslizar el dedo y la rueda desplaza sin inercia;
+- botón derecho (o el de Atrás del ratón) = **Atrás**, botón central = **Inicio**, `Esc` = Atrás y la tecla Windows/⌘ sola = Inicio;
+- lo que tecleas se escribe en el campo de texto activo con la distribución de **tu** teclado (acentos y ñ incluidos), y `Ctrl+C/V/X/A`, flechas, Borrar y Entrar funcionan (Android 13+); sin un campo activo, las flechas y Entrar mueven el foco;
+- lo que copias en el visor llega al portapapeles de Android, y los archivos que arrastras a la ventana, a **Descargas/Kast**;
+- la imagen viaja a 1080p como máximo (H.264 por hardware), suficiente para una pantalla 4K.
+
+**Ver y controlar otros equipos** (cualquier Android): los equipos de tu red aparecen solos (o por IP o por ID); pulsa **Controlar** o **Ver**, o en **Más…** entra con contraseña o código. Con el dedo: tocar = clic, mantener = clic derecho, arrastrar = arrastrar con el botón pulsado y dos dedos = rueda (tocar con dos dedos = clic derecho). Un ratón o un teclado conectados funcionan tal cual, y **Teclado** abre el de pantalla.
+
+**Instalar** (sin Play Store): el `Kast-<versión>-android.apk` del Release, o compílalo con el SDK y el NDK de Android, JDK 17+ y Rust (`rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android`); con el dispositivo conectado por `adb`:
+
+```bash
+cd android && ./gradlew installDebug -PkastAbis=arm64-v8a
+```
+
+Para una pantalla sin nadie delante, desde `adb` se puede dejar concedida la captura (`adb shell appops set io.github.abrahmch1.kast PROJECT_MEDIA allow`): Android deja de preguntar y Kast vuelve a compartir sola al encenderse.
+
 ## Estructura
 
-Por lenguajes: **Rust** (Kast Link: protocolo, cifrado, vídeo y entrada, compartido con la app de iOS), **Swift** (apps de macOS e iOS), **C** (Windows: monitores, bandeja y ventana) y HTML/JavaScript (la interfaz compartida).
+Por lenguajes: **Rust** (Kast Link: protocolo, cifrado, vídeo y entrada, compartido con las apps de iOS y Android), **Swift** (apps de macOS e iOS), **Kotlin** (app de Android), **C** (Windows: monitores, bandeja y ventana) y HTML/JavaScript (la interfaz compartida).
 
 ```
 src/core.c      Windows: monitores, DDC/CI, comandos y configuración
@@ -291,13 +320,14 @@ src/ui.html     interfaz compartida por Windows y macOS
 mac/Sources/    macOS: app de la barra de menús en Swift (mismo lenguaje de comandos)
 link/           Kast Link en Rust: biblioteca (protocolo, cifrado, acceso, vídeo, entrada) y agente de escritorio
 ios/            app de iOS (SwiftUI + UIKit) sobre el núcleo de Kast Link
+android/        app de Android (Kotlin, sin dependencias) sobre el núcleo de Kast Link (Gradle compila el Rust)
 assets/         logo (kast.svg) e iconos generados
 site/           página web (HTML estático, lista para Vercel)
 tools/          generador de los iconos (make-icon.ps1)
 third_party/    SDK de WebView2 (licencia BSD de Microsoft)
 ```
 
-Las versiones se publican automáticamente al subir una etiqueta `v*`: GitHub Actions compila Windows, macOS e iOS, prueba Kast Link de punta a punta, firma y notariza la app de macOS y su imagen de disco y adjunta los paquetes de Windows (`.zip`) y macOS (`.dmg` y `.zip`) al Release.
+Las versiones se publican automáticamente al subir una etiqueta `v*`: GitHub Actions compila Windows, macOS, iOS y Android, prueba Kast Link de punta a punta, firma y notariza la app de macOS y su imagen de disco y adjunta los paquetes de Windows (`.zip`), macOS (`.dmg` y `.zip`) y Android (`.apk`) al Release. La app de Android se firma con el almacén de claves de los secretos `ANDROID_KEYSTORE` (en base64), `ANDROID_KEYSTORE_PASSWORD` y `ANDROID_KEY_ALIAS`; sin ellos, con una clave de depuración (para actualizar sin desinstalar hay que firmar siempre con la misma).
 
 ## Página web
 

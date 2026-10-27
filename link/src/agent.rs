@@ -684,16 +684,19 @@ impl Agent {
             std::thread::spawn(move || a.connect(&id, x, control, None, Vec::new()));
         }
         // Recordar el dispositivo (su identidad, para detectar cambios).
-        {
+        let host_platform = {
             let mut st = self.st.lock().unwrap();
             let (plat, dname) = st.devices.get(&peer_id).map(|d| (d.platform.clone(), d.name.clone())).unwrap_or_default();
+            let known = st.saved.iter().find(|s| s.key == peer_key).map(|s| s.platform.clone()).unwrap_or_default();
+            let host_platform = if plat.is_empty() { known } else { plat.clone() };
             let ip = addr.to_string();
             match st.saved.iter_mut().find(|s| s.key == peer_key || (s.key.is_empty() && s.addr == ip)) {
                 Some(s) => { s.key = peer_key.clone(); s.addr = ip; if !dname.is_empty() { s.name = dname; s.platform = plat; } }
                 None => st.saved.push(Saved { key: peer_key, name: dname, platform: plat, addr: ip, ..Default::default() }),
             }
             self.save(&st);
-        }
+            host_platform
+        };
         ch.recv(&mut m).map_err(|_| format!("{name} cerró la conexión al empezar a transmitir (revisa Kast → Dispositivos en ese equipo)"))?;
         match m.first() {
             Some(&msg::HELLO) => {}
@@ -723,7 +726,10 @@ impl Agent {
             (None, None, None)
         };
         self.set_session(session, |s| { s.files = files.clone(); s.input = input.clone(); });
-        let _ = self.proxy.send_event(viewer::Event::Open { session, shared: shared.clone(), monitor: (show_on > 0).then_some(show_on), title, input, files, geo });
+        // Android escribe con la distribución de su teclado virtual (EE. UU.): lo que se teclea viaja como texto.
+        let text_keys = host_platform == "android";
+        let _ = self.proxy.send_event(viewer::Event::Open { session, shared: shared.clone(), monitor: (show_on > 0).then_some(show_on), title, input, files, geo,
+                                                            text_keys });
         self.set_session(session, |s| s.state = "live");
         let proxy = self.proxy.clone();
         let mut drag = DragIn { a: self.clone(), session, peer: name.to_string(), recv: None, done: None };

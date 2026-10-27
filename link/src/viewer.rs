@@ -49,8 +49,9 @@ pub enum Event {
     /// Abre la ventana de una sesión. `monitor`: None = ventana, Some(n) = pantalla completa en el monitor n.
     /// `input`: con control, por aquí salen el teclado y el ratón hacia el otro equipo.
     /// `files`: con control, recibe los archivos que se arrastran a la ventana.
+    /// `text_keys`: las teclas que escriben algo se envían como texto (Android: así vale cualquier distribución).
     Open { session: u64, shared: Arc<Mutex<Shared>>, monitor: Option<usize>, title: String, input: Option<Sender<Vec<u8>>>, files: Option<FileDrop>,
-           geo: Option<Geo> },
+           geo: Option<Geo>, text_keys: bool },
     Redraw(u64),
     /// Estado que se muestra en el título (p. ej. el progreso de un envío); None lo quita.
     Status { session: u64, text: Option<String> },
@@ -73,6 +74,9 @@ struct Win {
     layout: (f64, f64, f64, usize, usize),
     mods: ModifiersState,
     keys: HashSet<String>,
+    /// Teclas cuya pulsación se envió como texto (su «suelta» no se envía).
+    typed: HashSet<String>,
+    text_keys: bool,
     buttons: [bool; 5],
     pos: Option<(i32, i32)>,
     title: String,
@@ -126,7 +130,7 @@ impl Win {
                 #[cfg(windows)]
                 crate::platform::syskeys::release(self.hwnd);
             }
-            WindowEvent::KeyboardInput { event: KeyEvent { physical_key: PhysicalKey::Code(code), state, .. }, .. } => {
+            WindowEvent::KeyboardInput { event: KeyEvent { physical_key: PhysicalKey::Code(code), state, text, logical_key, .. }, .. } => {
                 let down = *state == ElementState::Pressed;
                 // Atajos locales: Ctrl+Alt+Shift+F pantalla completa, Ctrl+Alt+Shift+Q salir.
                 let local = self.mods.control_key() && self.mods.alt_key() && self.mods.shift_key();
@@ -137,6 +141,22 @@ impl Win {
                 }
                 if local && down && *code == KeyCode::KeyQ { self.release_all(); return true; }
                 let name = format!("{code:?}");
+                if self.text_keys {
+                    // Acento pendiente (tecla muerta): llega con la letra siguiente, ya compuesto.
+                    if matches!(logical_key, Key::Dead(_)) { return false; }
+                    // Lo que escribe un carácter (también con AltGr = Ctrl+Alt), como texto; los atajos, como teclas.
+                    let shortcut = self.mods.super_key() || (self.mods.control_key() && !self.mods.alt_key());
+                    let typed = text.as_ref().filter(|t| !shortcut && !t.is_empty() && !t.chars().any(char::is_control));
+                    if down {
+                        if let Some(t) = typed {
+                            self.typed.insert(name);
+                            self.send(Input::Text { text: t.to_string() });
+                            return false;
+                        }
+                    } else if self.typed.remove(&name) {
+                        return false;
+                    }
+                }
                 if down { self.keys.insert(name.clone()); } else if !self.keys.remove(&name) { return false; }
                 self.send(Input::Key { down, code: name });
             }
@@ -330,7 +350,7 @@ impl ApplicationHandler<Event> for App {
 
     fn user_event(&mut self, el: &ActiveEventLoop, event: Event) {
         match event {
-            Event::Open { session, shared, monitor, title, input, files, geo } => {
+            Event::Open { session, shared, monitor, title, input, files, geo, text_keys } => {
                 let mut attrs = Window::default_attributes().with_title(&title).with_inner_size(LogicalSize::new(1280.0, 720.0));
                 if let Some(m) = monitor.and_then(|n| nth_monitor(el, n)) {
                     attrs = attrs.with_fullscreen(Some(Fullscreen::Borderless(Some(m))));
@@ -346,7 +366,7 @@ impl ApplicationHandler<Event> for App {
                 if let Some(tx) = &input { crate::platform::syskeys::register(hwnd, tx.clone()); }
                 self.by_session.insert(session, id);
                 self.wins.insert(id, Win { session, window, surface, shared, input, layout: (0.0, 0.0, 0.0, 0, 0),
-                                           mods: ModifiersState::empty(), keys: HashSet::new(), buttons: [false; 5], pos: None,
+                                           mods: ModifiersState::empty(), keys: HashSet::new(), typed: HashSet::new(), text_keys, buttons: [false; 5], pos: None,
                                            title, files, drops: Vec::new(), drag_asked: false, ignore_drops: None, geo, hwnd });
             }
             Event::Status { session, text } => {
