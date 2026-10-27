@@ -4,7 +4,9 @@
 //! de 6 dígitos derivado del intercambio para descartar a alguien en medio.
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 const PATTERN: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
 const MAX_PLAIN: usize = 65535 - 16;
@@ -104,10 +106,17 @@ fn pairing_code(hash: &[u8]) -> String {
     format!("{:03} {:03}", n / 1000, n % 1000)
 }
 
-/// Canal cifrado. Se puede clonar (	ry_clone) para enviar y recibir desde hilos distintos.
+/// Canal cifrado. Se puede clonar (try_clone) para enviar y recibir desde hilos distintos.
 pub struct Secure {
     stream: TcpStream,
-    noise: Arc<Mutex<snow::TransportState>>,
+    /// Enviar y recibir llevan cada uno su contador (el nonce de Noise) con su cerrojo: recibir nunca espera a un envío
+    /// que está bloqueado porque la red no da abasto (si no, enviando un archivo mientras llega el vídeo, los dos
+    /// equipos se quedaban esperándose el uno al otro). En el cable es lo mismo que el modo con estado.
+    noise: Arc<snow::StatelessTransportState>,
+    tx: Arc<Mutex<u64>>,
+    rx: Arc<Mutex<u64>>,
+    /// Envíos normales (teclado, ratón, vídeo…) esperando turno: los de fondo (archivos) les ceden el paso.
+    urgent: Arc<AtomicUsize>,
     rbuf: Vec<u8>,
     wbuf: Vec<u8>,
     /// Clave pública del otro equipo.
@@ -138,12 +147,16 @@ impl Secure {
         let peer = hs.get_remote_static().ok_or_else(|| err("el otro equipo no envió su identidad"))?.to_vec();
         let code = pairing_code(hs.get_handshake_hash());
         let binding = hs.get_handshake_hash().to_vec();
-        Ok(Self { stream, noise: Arc::new(Mutex::new(hs.into_transport_mode().map_err(err)?)), rbuf: Vec::new(), wbuf: vec![0u8; 65535], peer, code, binding })
+        Ok(Self { stream, noise: Arc::new(hs.into_stateless_transport_mode().map_err(err)?), tx: Arc::default(), rx: Arc::default(),
+                  urgent: Arc::default(), rbuf: Vec::new(), wbuf: vec![0u8; 65535], peer, code, binding })
     }
 
     /// Lado que se conecta (visor).
     pub fn connect(mut stream: TcpStream, me: &Identity) -> io::Result<Self> {
         stream.set_nodelay(true)?;
+        // Lo que el visor envía (teclado y ratón, pero también archivos) no se acumula en el sistema: así el ratón no
+        // queda detrás de megas de un archivo esperando a salir.
+        let _ = socket2::SockRef::from(&stream).set_send_buffer_size(256 << 10);
         let mut hs = snow::Builder::new(PATTERN.parse().map_err(err)?).local_private_key(&me.private).map_err(err)?
             .build_initiator().map_err(err)?;
         let mut buf = vec![0u8; 65535];
@@ -178,14 +191,30 @@ impl Secure {
 
     /// Otra referencia al mismo canal (para un segundo hilo).
     pub fn try_clone(&self) -> io::Result<Self> {
-        Ok(Self { stream: self.stream.try_clone()?, noise: self.noise.clone(), rbuf: Vec::new(), wbuf: vec![0u8; 65535], peer: self.peer.clone(), code: self.code.clone(), binding: self.binding.clone() })
+        Ok(Self { stream: self.stream.try_clone()?, noise: self.noise.clone(), tx: self.tx.clone(), rx: self.rx.clone(), urgent: self.urgent.clone(),
+                  rbuf: Vec::new(), wbuf: vec![0u8; 65535], peer: self.peer.clone(), code: self.code.clone(), binding: self.binding.clone() })
+    }
+
+    fn write(&mut self, plain: &[u8]) -> io::Result<()> {
+        // Cifrar y escribir bajo el mismo cerrojo mantiene el orden de los nonces en el cable.
+        let mut nonce = self.tx.lock().unwrap();
+        let n = self.noise.write_message(*nonce, plain, &mut self.wbuf).map_err(err)?;
+        *nonce += 1;
+        send_raw(&mut self.stream, &self.wbuf[..n])
     }
 
     pub fn send(&mut self, plain: &[u8]) -> io::Result<()> {
-        // Cifrar y escribir bajo el mismo cerrojo mantiene el orden de los nonces en el cable.
-        let mut noise = self.noise.lock().unwrap();
-        let n = noise.write_message(plain, &mut self.wbuf).map_err(err)?;
-        send_raw(&mut self.stream, &self.wbuf[..n])
+        self.urgent.fetch_add(1, Ordering::SeqCst);
+        let r = self.write(plain);
+        self.urgent.fetch_sub(1, Ordering::SeqCst);
+        r
+    }
+
+    /// Envío de fondo (archivos): espera a que no haya envíos normales pendientes, para no retrasar el teclado y el
+    /// ratón (ni el vídeo).
+    pub fn send_bulk(&mut self, plain: &[u8]) -> io::Result<()> {
+        while self.urgent.load(Ordering::SeqCst) > 0 { std::thread::sleep(Duration::from_millis(1)); }
+        self.write(plain)
     }
 
     pub fn send_typed(&mut self, kind: u8, body: &[u8]) -> io::Result<()> {
@@ -208,13 +237,56 @@ impl Secure {
     }
 
     pub fn recv(&mut self, out: &mut Vec<u8>) -> io::Result<usize> {
+        // Un mensaje entero (leer y descifrar) bajo el cerrojo de recibir: el orden de los nonces es el del cable.
+        let mut nonce = self.rx.lock().unwrap();
         let mut raw = std::mem::take(&mut self.rbuf);
-        let n = recv_raw(&mut self.stream, &mut raw)?;
-        out.resize(65535, 0);
-        let r = self.noise.lock().unwrap().read_message(&raw[..n], out).map_err(err);
+        let r = recv_raw(&mut self.stream, &mut raw).and_then(|n| {
+            out.resize(65535, 0);
+            self.noise.read_message(*nonce, &raw[..n], out).map_err(err)
+        });
         self.rbuf = raw;
         let len = r?;
+        *nonce += 1;
         out.truncate(len);
         Ok(len)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    /// Los dos equipos se envían mucho a la vez (un archivo en un sentido y el vídeo en el otro) por una red lenta (el
+    /// anfitrión tarda en empezar a leer): ninguno se queda esperando al otro.
+    #[test]
+    fn enviar_y_recibir_a_la_vez() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        let host = std::thread::spawn(move || Secure::accept(l.accept().unwrap().0, &Identity::generate()).unwrap());
+        let viewer = Secure::connect(TcpStream::connect(addr).unwrap(), &Identity::generate()).unwrap();
+        let host = host.join().unwrap();
+        // Búferes pequeños: se llenan enseguida.
+        for s in [&viewer.stream, &host.stream] {
+            let r = socket2::SockRef::from(s);
+            r.set_send_buffer_size(16 << 10).unwrap();
+            r.set_recv_buffer_size(16 << 10).unwrap();
+        }
+        const N: usize = 300; // mensajes de 60 KB en cada sentido
+        let (done, all_done) = std::sync::mpsc::channel();
+        for (ch, viewer_side) in [(viewer, true), (host, false)] {
+            let (mut snd, mut rcv, done) = (ch.try_clone().unwrap(), ch, done.clone());
+            std::thread::spawn(move || {
+                let big = vec![7u8; 60_000];
+                for _ in 0..N { if viewer_side { snd.send_bulk(&big).unwrap() } else { snd.send(&big).unwrap() } }
+            });
+            std::thread::spawn(move || {
+                if !viewer_side { std::thread::sleep(Duration::from_millis(500)); }
+                let mut m = Vec::new();
+                for _ in 0..N { rcv.recv(&mut m).unwrap(); assert_eq!(m.len(), 60_000); }
+                done.send(()).unwrap();
+            });
+        }
+        for _ in 0..2 { all_done.recv_timeout(Duration::from_secs(20)).expect("los dos equipos se quedaron esperándose"); }
     }
 }

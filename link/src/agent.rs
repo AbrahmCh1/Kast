@@ -421,6 +421,11 @@ impl Agent {
                     None => self.toast("Para enviar archivos hace falta una sesión con control", true),
                 }
             }
+            // Pruebas (KAST_LINK_TEST): mover el ratón como si viniera de la ventana de la sesión.
+            "test_input" if std::env::var_os("KAST_LINK_TEST").is_some() => {
+                let input = self.st.lock().unwrap().sessions.iter().find(|x| x.session == n("session")).and_then(|x| x.input.clone());
+                if let Some(i) = input { let _ = i.send(input::Event::Move { x: n("x") as i32, y: n("y") as i32 }.encode()); }
+            }
             "layout_load" => {
                 let (a, path) = (self.clone(), s("path"));
                 std::thread::spawn(move || a.layout_load(&path));
@@ -753,7 +758,8 @@ impl Agent {
             std::thread::spawn(move || {
                 let proxy = a.proxy.clone();
                 let status = |t: Option<String>| { let _ = proxy.send_event(viewer::Event::Status { session, text: t }); };
-                match share::send_files(&paths, &mut |m| ch.lock().unwrap().send(m), &status) {
+                // De fondo: el teclado y el ratón de esta ventana pasan antes que los trozos del archivo.
+                match share::send_files(&paths, &mut |m| ch.lock().unwrap().send_bulk(m), &status) {
                     Ok((n, bytes)) => {
                         let what = format!("{n} archivo{} ({})", if n == 1 { "" } else { "s" }, share::human(bytes));
                         store::log(&format!("enviados a {peer}: {what}"));
@@ -790,7 +796,7 @@ impl Agent {
             let mut m = vec![msg::DRAG_FILES];
             m.extend_from_slice(json!({"items": items, "count": count, "bytes": bytes}).to_string().as_bytes());
             if ch.lock().unwrap().send(&m).is_err() || count == 0 { return; }
-            match share::send_files(&paths, &mut |m| ch.lock().unwrap().send(m), &|_| {}) {
+            match share::send_files(&paths, &mut |m| ch.lock().unwrap().send_bulk(m), &|_| {}) {
                 Ok((n, bytes)) => store::log(&format!("{peer} saca arrastrando {n} archivo{} ({})", if n == 1 { "" } else { "s" }, share::human(bytes))),
                 Err(e) => {
                     store::log(&format!("sacar archivos arrastrando hacia {peer}: {e}"));
