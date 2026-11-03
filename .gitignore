@@ -12,3 +12,8 @@ android/.gradle/
 android/build/
 android/app/build/
 android/local.properties
+ad/out/
+ad/audio/out/
+ad/audio/takes*/*
+!ad/audio/takes3/eduardo.*
+ad/**/__pycache__/
