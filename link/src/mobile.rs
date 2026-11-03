@@ -233,7 +233,7 @@ impl Client {
         // En escritorio (`kast-link probe`) se hace pasar por la app de iOS.
         let platform = if cfg!(target_os = "android") { "android" } else { "ios" };
         let req = json!({"name": self.name, "platform": platform, "monitor": monitor, "monitors": (1..=count).collect::<Vec<_>>(),
-                         "all_monitors": true, "group": group, "control": control, "auth": auth.map(|(k, _)| k.as_str())}).to_string();
+                         "all_monitors": true, "group": group, "control": control, "auth": auth.map(|(k, _)| k.as_str()), "acks": true}).to_string();
         ch.send_typed(msg::REQUEST, req.as_bytes())?;
         let mut m = Vec::new();
         loop {
@@ -254,6 +254,8 @@ impl Client {
             }
         }
         let granted: Value = serde_json::from_slice(&m[1..]).unwrap_or(Value::Null);
+        // Portapapeles al ritmo de la red, si el otro equipo también confirma lo recibido.
+        if granted.get("acks") == Some(&Value::Bool(true)) { ch.enable_acks(); }
         let got_control = control && granted.get("control").and_then(Value::as_bool).unwrap_or(false);
         let note = granted.get("note").and_then(Value::as_str).unwrap_or("").to_string();
         // Recordar el equipo (su identidad, para detectar cambios).

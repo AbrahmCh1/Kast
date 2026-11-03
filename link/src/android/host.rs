@@ -432,7 +432,10 @@ impl Host {
             false
         };
         let (w, h, fps) = { let v = self.video.lock().unwrap(); (v.w, v.h, v.fps) };
-        let acc = json!({"control": control, "note": note, "displays": [[w, h]], "monitor": 1, "bounds": Rect::new(0.0, 0.0, w as f64, h as f64).json()});
+        let acc = json!({"control": control, "note": note, "displays": [[w, h]], "monitor": 1, "bounds": Rect::new(0.0, 0.0, w as f64, h as f64).json(),
+                         "acks": true});
+        // Archivos y portapapeles al ritmo de la red, si el visor también confirma lo recibido.
+        if v.get("acks") == Some(&Value::Bool(true)) { ch.enable_acks(); }
         ch.send_typed(msg::ACCEPT, acc.to_string().as_bytes())?;
         {
             let mut saved = self.saved();

@@ -24,8 +24,8 @@ pub enum Clip {
 }
 
 const MAX_CLIP: usize = 32 << 20;
-/// Trozo de datos por mensaje (cabe en un mensaje Noise con su cabecera).
-const CHUNK: usize = 60_000;
+/// Trozo de datos por mensaje. Pequeño: un fotograma o una tecla nunca esperan más que a un trozo ya en camino.
+const CHUNK: usize = 16_000;
 
 fn hash_of(c: &Clip) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();

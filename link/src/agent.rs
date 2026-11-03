@@ -651,7 +651,7 @@ impl Agent {
         let nvirt = more.iter().filter(|x| x.virt).count();
         let layout = (nvirt > 0).then(|| layout_plan(screen, more));
         let req = json!({"name": self.name, "platform": store::platform(), "monitor": monitor, "monitors": monitors, "group": group,
-                         "control": control, "auth": auth.map(|(k, _)| k.as_str()), "virt": nvirt, "layout": layout}).to_string();
+                         "control": control, "auth": auth.map(|(k, _)| k.as_str()), "virt": nvirt, "layout": layout, "acks": true}).to_string();
         ch.send_typed(msg::REQUEST, req.as_bytes())?;
         let mut m = Vec::new();
         loop {
@@ -679,6 +679,8 @@ impl Agent {
         if !self.alive(session) { return Err("cancelada".into()); }
         // ¿Concedió el control? Si no, la sesión es sólo de vista (con el motivo, si lo hay).
         let granted: Value = serde_json::from_slice(&m[1..]).unwrap_or(Value::Null);
+        // Archivos y portapapeles al ritmo de la red, si el otro equipo también confirma lo recibido.
+        if granted.get("acks") == Some(&Value::Bool(true)) { ch.enable_acks(); }
         let note = granted.get("note").and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_string)
             .or_else(|| (control && !granted.get("control").and_then(Value::as_bool).unwrap_or(false)).then(|| "aceptó sólo ver, sin control".into()));
         if let Some(note) = note {
@@ -748,8 +750,9 @@ impl Agent {
             let (tx, rx) = channel::<Vec<u8>>();
             let mut out = ch.try_clone()?;
             std::thread::spawn(move || { for m in rx { if out.send(&m).is_err() { break; } } });
-            let ctx = tx.clone();
-            let clip = share::ClipSync::start(move |m| ctx.send(m).is_ok());
+            // El portapapeles va de fondo y por su cuenta: una imagen grande no se pone delante del teclado y el ratón.
+            let cch = Mutex::new(ch.try_clone()?);
+            let clip = share::ClipSync::start(move |m| cch.lock().unwrap().send_bulk(&m).is_ok());
             (Some(tx), Some(self.file_drop(session, name, ch.try_clone()?)), Some(clip))
         } else {
             (None, None, None)
@@ -1017,7 +1020,9 @@ impl Agent {
         // Con sus pantallas: el visor puede ofrecer cambiar de una a otra aunque haya entrado por ID o por IP.
         let displays: Vec<Value> = self.displays.lock().unwrap().iter().map(|(w, h)| json!([w, h])).collect();
         let mut acc = json!({"control": control, "note": note, "displays": displays, "monitor": monitor,
-                             "bounds": platform::display_bounds().get(monitor - 1).map(Rect::json)});
+                             "bounds": platform::display_bounds().get(monitor - 1).map(Rect::json), "acks": true});
+        // Archivos y portapapeles al ritmo de la red, si el visor también confirma lo recibido.
+        if v.get("acks") == Some(&Value::Bool(true)) { ch.enable_acks(); }
         if let (Some(a), Some(v)) = (acc.as_object_mut(), vinfo.as_object()) { a.extend(v.clone()); }
         // Permiso del grupo: las demás pantallas pedidas entran sin preguntar mientras dure (ver Grant). Se apunta antes
         // de confirmar, porque el visor abre las demás conexiones en cuanto recibe la confirmación.
@@ -1065,7 +1070,7 @@ impl Agent {
             let tx = Mutex::new(ch.try_clone()?);
             let drag_tx = Arc::new(Mutex::new(ch.try_clone()?));
             // En pruebas no se vigila el portapapeles real de este equipo.
-            let clip = (!test).then(|| Arc::new(share::ClipSync::start(move |m| tx.lock().unwrap().send(&m).is_ok())));
+            let clip = (!test).then(|| Arc::new(share::ClipSync::start(move |m| tx.lock().unwrap().send_bulk(&m).is_ok())));
             let (viewer, host) = (plat.clone(), store::platform());
             let (clip2, a, peer, kf, cl) = (clip.clone(), self.clone(), name.clone(), keyframe.clone(), closed.clone());
             std::thread::spawn(move || {
