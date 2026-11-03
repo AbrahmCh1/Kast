@@ -107,6 +107,52 @@ try:
     toast = A.wait(lambda m: m.get("ev") == "toast" and m.get("err"))
     print(f"5) rechazada: A recibe «{toast['msg']}»")
 
+    def no_errors(ag, secs):
+        """Lo que llega a `ag` durante `secs` segundos no trae errores."""
+        end, errs = time.time() + secs, []
+        while time.time() < end:
+            try:
+                m = ag.q.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if m.get("ev") == "toast" and m.get("err"):
+                errs.append(m["msg"])
+        assert not errs, f"{ag.name} mostró un error al cancelar: {errs}"
+
+    # A cancela mientras B decide: la petición desaparece de B (sin esperar a que caduque) y A no ve ningún error.
+    A.send(cmd="connect", id=me_b["id"], monitor=1, show_on=0)
+    B.wait(lambda m: m.get("ev") == "request")
+    w = A.wait(state(lambda m: any(s["state"] == "waiting" for s in m["sessions"])))
+    t0 = time.time()
+    A.send(cmd="disconnect", session=next(s["session"] for s in w["sessions"] if s["state"] == "waiting"))
+    B.wait(lambda m: m.get("ev") == "toast" and "canceló" in m.get("msg", ""), 5)
+    B.settled(lambda m: not m["requests"], 2)
+    no_errors(A, 1.0)
+    A.settled(lambda m: not m["sessions"], 2)
+    print(f"5b) A cancela mientras B decide: la petición sale de B en {time.time() - t0:.1f} s, sin errores en A")
+
+    # Cancelar mientras conecta, contra un equipo que acepta la conexión pero nunca responde: se corta enseguida.
+    import socket
+    mudo = socket.socket()
+    mudo.bind(("127.0.0.1", 0))
+    mudo.listen(1)
+    mudo.settimeout(10)
+    A.send(cmd="connect", id=f"ip:127.0.0.1:{mudo.getsockname()[1]}", monitor=1, show_on=0)
+    conn, _ = mudo.accept()
+    w = A.wait(state(lambda m: any(s["state"] == "connecting" for s in m["sessions"])))
+    A.send(cmd="disconnect", session=next(s["session"] for s in w["sessions"] if s["state"] == "connecting"))
+    A.settled(lambda m: not m["sessions"], 2)
+    conn.settimeout(3)
+    try:
+        while conn.recv(4096):
+            pass
+    except socket.timeout:
+        raise SystemExit("cancelar mientras conecta no cortó la conexión")
+    conn.close()
+    mudo.close()
+    no_errors(A, 1.0)
+    print("5c) A cancela mientras conecta: la conexión se corta enseguida, sin errores")
+
     def live_session():
         st = A.wait(state(lambda m: any(s["dir"] == "in" and s["state"] == "live" for s in m["sessions"])), 30)
         return next(s for s in st["sessions"] if s["dir"] == "in")

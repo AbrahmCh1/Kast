@@ -5,8 +5,9 @@
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const PATTERN: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
 const MAX_PLAIN: usize = 65535 - 16;
@@ -106,6 +107,14 @@ fn pairing_code(hash: &[u8]) -> String {
     format!("{:03} {:03}", n / 1000, n % 1000)
 }
 
+/// Cómo terminó la espera de una petición (`Secure::wait_answer`).
+pub enum Wait<T> {
+    Answer(T),
+    Timeout,
+    /// Quien pedía canceló o se fue.
+    Gone,
+}
+
 /// Canal cifrado. Se puede clonar (try_clone) para enviar y recibir desde hilos distintos.
 pub struct Secure {
     stream: TcpStream,
@@ -193,6 +202,29 @@ impl Secure {
     pub fn try_clone(&self) -> io::Result<Self> {
         Ok(Self { stream: self.stream.try_clone()?, noise: self.noise.clone(), tx: self.tx.clone(), rx: self.rx.clone(), urgent: self.urgent.clone(),
                   rbuf: Vec::new(), wbuf: vec![0u8; 65535], peer: self.peer.clone(), code: self.code.clone(), binding: self.binding.clone() })
+    }
+
+    /// Espera la respuesta a una petición que alguien tiene que aceptar en este equipo (hasta `max`) vigilando la
+    /// conexión: mientras espera, quien pide no envía nada, así que si la cierra es que canceló (o se fue) y la
+    /// petición ya no tiene que seguir en pantalla.
+    pub fn wait_answer<T>(&self, rx: &Receiver<T>, max: Duration) -> Wait<T> {
+        let t = Instant::now();
+        let _ = self.stream.set_nonblocking(true);
+        let r = loop {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(a) => break Wait::Answer(a),
+                Err(RecvTimeoutError::Disconnected) => break Wait::Timeout,
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+            match self.stream.peek(&mut [0u8; 1]) {
+                Ok(0) => break Wait::Gone,
+                Err(e) if e.kind() != io::ErrorKind::WouldBlock && e.kind() != io::ErrorKind::Interrupted => break Wait::Gone,
+                _ => {}
+            }
+            if t.elapsed() > max { break Wait::Timeout; }
+        };
+        let _ = self.stream.set_nonblocking(false);
+        r
     }
 
     fn write(&mut self, plain: &[u8]) -> io::Result<()> {

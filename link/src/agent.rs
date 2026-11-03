@@ -28,7 +28,7 @@
 //!   {"t":"link","ev":"toast","msg":"…","err":false}
 //!   {"t":"link","ev":"need_auth","id","name","monitor","show_on","control"}  el equipo pide contraseña o código
 use crate::discovery::{self, Beacon, Packet};
-use crate::net::{self, Identity, Secure, id_of, msg};
+use crate::net::{self, Identity, Secure, Wait, id_of, msg};
 use crate::store::{self, Saved};
 use crate::virt::{self, Rect};
 use crate::{LocalMon, Res, access, input, platform, share, stream, viewer};
@@ -450,9 +450,30 @@ impl Agent {
 
     pub fn stop_session(&self, session: u64) {
         let mut st = self.st.lock().unwrap();
-        if let Some(s) = st.sessions.iter_mut().find(|s| s.session == session) {
-            s.stopped = true;
-            if let Some(sock) = &s.sock { let _ = sock.shutdown(std::net::Shutdown::Both); }
+        let Some(i) = st.sessions.iter().position(|s| s.session == session) else { return };
+        let s = &mut st.sessions[i];
+        s.stopped = true;
+        if let Some(sock) = &s.sock { let _ = sock.shutdown(std::net::Shutdown::Both); }
+        // Cancelada antes de que el otro equipo aceptara: sale ya de la app (el hilo que conectaba lo ve y termina
+        // sin enviar la petición o, si ya la envió, cortando la conexión, que en el otro equipo la retira).
+        if s.dir == "in" && s.state != "live" {
+            st.sessions.remove(i);
+            drop(st);
+            self.emit_state();
+        }
+    }
+
+    /// ¿Sigue en pie? Falso si se canceló o se desconectó desde la app.
+    fn alive(&self, session: u64) -> bool {
+        self.st.lock().unwrap().sessions.iter().any(|s| s.session == session && !s.stopped)
+    }
+
+    /// Apunta el socket de una sesión que está conectando, para que cancelar la corte. Falso si ya se canceló.
+    fn attach(&self, session: u64, sock: &TcpStream) -> bool {
+        let mut st = self.st.lock().unwrap();
+        match st.sessions.iter_mut().find(|s| s.session == session && !s.stopped) {
+            Some(s) => { s.sock = sock.try_clone().ok(); true }
+            None => false,
         }
     }
 
@@ -590,10 +611,13 @@ impl Agent {
                                                      want_control: control, files: None, input: None, via: "", peer_key: String::new() });
         self.emit_state();
         let r = self.view(session, id, &addrs, &name, &screen, control, auth.as_ref(), &more);
+        let cancelled = !self.alive(session);
         let _ = self.proxy.send_event(viewer::Event::Close(session));
         self.end_session(session);
         match r {
             Ok(()) => {}
+            // Cancelada desde la app: cortar la conexión a medias no es un error que haya que enseñar.
+            Err(e) if cancelled => store::log(&format!("ver {name}: cancelada ({e})")),
             Err(e) => { store::log(&format!("ver {name}: {e}")); self.toast(format!("{name}: {e}"), true) }
         }
     }
@@ -603,9 +627,11 @@ impl Agent {
             auth: Option<&(String, String)>, more: &[Screen]) -> Res<()> {
         let (mut monitor, show_on) = (screen.monitor, screen.show_on);
         // La dirección conocida primero; si no responde, las demás desde las que se anunció.
-        let (stream, addr) = addrs.iter().enumerate()
+        let (stream, addr) = addrs.iter().enumerate().take_while(|_| self.alive(session))
             .find_map(|(i, a)| TcpStream::connect_timeout(a, Duration::from_secs(if i == 0 { 4 } else { 2 })).ok().map(|s| (s, *a)))
             .ok_or("no responde")?;
+        // Desde aquí, cancelar corta la conexión (también a mitad del intercambio cifrado).
+        if !self.attach(session, &stream) { return Err("cancelada".into()); }
         if addr != addrs[0] {
             store::log(&format!("{name}: {} no responde, conectado por {addr}", addrs[0]));
             if let Some(d) = self.st.lock().unwrap().devices.get_mut(id) { d.addr = Some(addr); }
@@ -614,9 +640,10 @@ impl Agent {
         let peer_key = net::hex(&ch.peer);
         let peer_id = id_of(&ch.peer);
         store::check_peer(&self.st.lock().unwrap().saved, id, &ch.peer)?;
-        let sock = ch.shutdown_handle()?;
         let code = ch.code.clone();
-        self.set_session(session, |s| { s.state = "waiting"; s.code = code; s.sock = Some(sock); });
+        self.set_session(session, |s| { s.state = "waiting"; s.code = code; });
+        // Cancelada mientras conectaba: la petición no llega a aparecer en el otro equipo.
+        if !self.alive(session) { return Err("cancelada".into()); }
         // Grupo de este dispositivo: las demás pantallas (ahora o más tarde) entran con el mismo permiso.
         let group = self.st.lock().unwrap().groups.entry(id.to_string())
             .or_insert_with(|| { let mut b = [0u8; 12]; let _ = getrandom::fill(&mut b); net::hex(&b) }).clone();
@@ -648,6 +675,8 @@ impl Agent {
                 _ => return Err("respuesta inesperada".into()),
             }
         }
+        // Aceptó justo cuando se cancelaba: no se abre nada.
+        if !self.alive(session) { return Err("cancelada".into()); }
         // ¿Concedió el control? Si no, la sesión es sólo de vista (con el motivo, si lo hay).
         let granted: Value = serde_json::from_slice(&m[1..]).unwrap_or(Value::Null);
         let note = granted.get("note").and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_string)
@@ -739,7 +768,7 @@ impl Agent {
                                     _ => if let Some(c) = &clip { c.on_message(m) },
                                 });
         // Cerrar la ventana o pulsar "Desconectar" corta la conexión a propósito: no es un error.
-        let stopped = self.st.lock().unwrap().sessions.iter().any(|s| s.session == session && s.stopped);
+        let stopped = !self.alive(session);
         match r {
             Err(_) if stopped => Ok(()),
             // El otro equipo detuvo la transmisión (o se cerró Kast allí).
@@ -906,15 +935,23 @@ impl Agent {
             self.emit(json!({"t": "link", "ev": "request", "req": req, "name": name, "platform": plat, "code": code, "monitor": monitor,
                              "monitors": monitors, "control": wants_control, "virt": nvirt}));
             self.emit_state();
-            let answer = rx.recv_timeout(Duration::from_secs(90));
+            let answer = ch.wait_answer(&rx, Duration::from_secs(90));
             {
                 let mut st = self.st.lock().unwrap();
                 st.requests.retain(|r| r.req != req);
             }
             self.emit_state();
-            let Ok(Answer { accept, remember, control: allow }) = answer else {
-                let _ = ch.send_typed(msg::REJECT, b"no se respondio a tiempo");
-                return Ok(());
+            let Answer { accept, remember, control: allow } = match answer {
+                Wait::Answer(a) => a,
+                Wait::Gone => {
+                    store::log(&format!("{name} canceló la petición de conexión"));
+                    self.toast(format!("{name} canceló la petición de conexión"), false);
+                    return Ok(());
+                }
+                Wait::Timeout => {
+                    let _ = ch.send_typed(msg::REJECT, format!("{} no respondió a tiempo", self.name).as_bytes());
+                    return Ok(());
+                }
             };
             if !accept {
                 ch.send_typed(msg::REJECT, format!("{} rechazó la conexión", self.name).as_bytes())?;

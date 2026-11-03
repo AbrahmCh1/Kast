@@ -20,7 +20,7 @@
 use crate::access::{self, Access, Limiter, PairCode};
 use crate::discovery::{self, Beacon, Packet};
 use crate::input::{self, Event};
-use crate::net::{self, Identity, Secure, msg};
+use crate::net::{self, Identity, Secure, Wait, msg};
 use crate::store::{self, Saved};
 use crate::virt::Rect;
 use crate::{Res, h264, mobile, now_us, share};
@@ -392,12 +392,21 @@ impl Host {
             self.st.lock().unwrap().requests.push(Req { req, name: name.clone(), platform: plat.clone(), code: ch.code.clone(), control: wants_control, answer: tx });
             (self.emit)(&json!({"ev": "request", "req": req, "name": name, "platform": plat, "code": ch.code, "control": wants_control}));
             self.emit_state();
-            let answer = rx.recv_timeout(Duration::from_secs(90));
+            let answer = ch.wait_answer(&rx, Duration::from_secs(90));
             self.st.lock().unwrap().requests.retain(|r| r.req != req);
             self.emit_state();
-            let Ok((accept, remember, allow)) = answer else {
-                let _ = ch.send_typed(msg::REJECT, b"no se respondio a tiempo");
-                return Ok(());
+            let (accept, remember, allow) = match answer {
+                Wait::Answer(a) => a,
+                // Quien pedía canceló: fuera la petición (y su aviso), sin más.
+                Wait::Gone => {
+                    store::log(&format!("{name} canceló la petición de conexión"));
+                    self.toast(format!("{name} canceló la petición de conexión"), false);
+                    return Ok(());
+                }
+                Wait::Timeout => {
+                    let _ = ch.send_typed(msg::REJECT, format!("{} no respondió a tiempo", self.name).as_bytes());
+                    return Ok(());
+                }
             };
             if !accept {
                 ch.send_typed(msg::REJECT, format!("{} rechazó la conexión", self.name).as_bytes())?;

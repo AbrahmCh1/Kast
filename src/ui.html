@@ -1181,8 +1181,9 @@ function renderLink() {
       ${d.online && !d.sharing ? '<div class="note">No permite que otros vean sus pantallas.</div>' : ''}
       <div class="screens"></div>
       <div class="checks"><label><input type="checkbox" data-k="control"${sel.control ? ' checked' : ''}>Controlar teclado y ratón</label></div>
-      ${waiting ? `<div class="waiting"><div class="spin"></div><div>${waiting.state === 'waiting'
-        ? `Acepta en <b>${esc(d.name)}</b>. Código: <span class="code sm">${esc(waiting.code)}</span>` : 'Conectando…'}</div></div>` : ''}
+      ${waiting ? `<div class="waiting"><div class="spin"></div><div class="grow">${waiting.state === 'waiting'
+        ? `Acepta en <b>${esc(d.name)}</b>. Código: <span class="code sm">${esc(waiting.code)}</span>` : 'Conectando…'}</div>
+        <button class="btn" data-a="cancel">Cancelar</button></div>` : ''}
       <div class="dev-f"><button class="btn primary" data-a="go">${icon('play')}Conectar</button>
         <button class="btn" data-a="auth" title="Conectar con la contraseña de acceso desatendido o con un código de emparejamiento">${icon('key')}Contraseña o código</button>
         <div class="grow"></div><button class="btn ghost" data-a="forget" title="Olvidar este dispositivo">${icon('trash')}</button></div>
@@ -1257,6 +1258,7 @@ function renderLink() {
     };
     $('[data-k=control]', c).onchange = e => sel.control = e.target.checked;
     go.onclick = () => { const sc = screensOf(); linkCmd({ cmd: 'connect', id: d.id, monitor: sc[0].monitor, show_on: sc[0].show_on, screens: sc, control: sel.control }); };
+    if (waiting) $('[data-a=cancel]', c).onclick = () => linkCmd({ cmd: 'disconnect', session: waiting.session });
     auth.onclick = () => authDialog({ id: d.id, name: d.name, screens: screensOf(), control: sel.control });
     draw();
     $('[data-a=forget]', c).onclick = async () => {
