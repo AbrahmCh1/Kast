@@ -302,7 +302,7 @@ impl Host {
     fn beacon(&self) -> Beacon {
         let (w, h) = { let v = self.video.lock().unwrap(); (v.w, v.h) };
         Beacon { id: self.id.clone(), name: self.name.clone(), platform: "android".into(), port: self.port, displays: vec![(w, h)],
-                 sharing: self.st.lock().unwrap().sharing, vd: false }
+                 sharing: self.st.lock().unwrap().sharing, vd: false, headless: false }
     }
 
     fn announce(&self) {

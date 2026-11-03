@@ -58,6 +58,8 @@ struct Dev {
     sharing: bool,
     /// Puede crear pantallas virtuales.
     vd: bool,
+    /// No tiene monitor: al conectar se le crea una pantalla virtual.
+    headless: bool,
 }
 
 /// Pantalla que se quiere ver: una suya (`monitor`) o una virtual nueva (`virt`), y dónde mostrarla.
@@ -260,7 +262,7 @@ impl Agent {
     fn beacon(&self) -> Beacon {
         Beacon { id: self.id.clone(), name: self.name.clone(), platform: store::platform().into(), port: self.port,
                  displays: self.displays.lock().unwrap().clone(), sharing: self.sharing.load(Ordering::Relaxed),
-                 vd: platform::vdisplay::supported() }
+                 vd: platform::vdisplay::supported(), headless: headless() }
     }
 
     fn emit_state(&self) {
@@ -281,6 +283,7 @@ impl Agent {
                 "manual": saved.map(|s| s.manual).unwrap_or(false),
                 "sharing": d.sharing,
                 "vd": d.vd,
+                "headless": d.headless,
                 "short_id": net::short_id(id),
                 "displays": d.displays.iter().map(|(w, h)| json!([w, h])).collect::<Vec<_>>(),
             })
@@ -303,7 +306,7 @@ impl Agent {
         let pairing = st.pairing.as_ref().filter(|p| !p.expired()).map(|p| json!({"code": p.code, "control": p.control, "secs": p.secs_left()}));
         let me = json!({"id": self.id, "short_id": net::short_id(&self.id), "name": self.name, "platform": store::platform(), "port": self.port,
                         "sharing": self.sharing.load(Ordering::Relaxed), "capture": platform::capture_allowed(), "input": platform::input_allowed(),
-                        "vd": platform::vdisplay::supported(),
+                        "vd": platform::vdisplay::supported(), "headless": headless(),
                         "displays": self.displays.lock().unwrap().iter().map(|(w, h)| json!([w, h])).collect::<Vec<_>>()});
         drop(st);
         let all: Vec<Value> = devices.into_iter().chain(pending).collect();
@@ -649,7 +652,8 @@ impl Agent {
             .or_insert_with(|| { let mut b = [0u8; 12]; let _ = getrandom::fill(&mut b); net::hex(&b) }).clone();
         let monitors: Vec<usize> = std::iter::once(monitor).chain(more.iter().filter(|x| !x.virt).map(|x| x.monitor)).collect();
         let nvirt = more.iter().filter(|x| x.virt).count();
-        let layout = (nvirt > 0).then(|| layout_plan(screen, more));
+        // El plan va siempre: si el equipo no tiene monitor, con él sabe de qué tamaño crearle la pantalla.
+        let layout = layout_plan(screen, more);
         let req = json!({"name": self.name, "platform": store::platform(), "monitor": monitor, "monitors": monitors, "group": group,
                          "control": control, "auth": auth.map(|(k, _)| k.as_str()), "virt": nvirt, "layout": layout, "acks": true}).to_string();
         ch.send_typed(msg::REQUEST, req.as_bytes())?;
@@ -870,8 +874,13 @@ impl Agent {
         let wants_control = v.get("control").and_then(Value::as_bool).unwrap_or(false);
         let auth = v.get("auth").and_then(Value::as_str).unwrap_or("").to_string();
         let group = v.get("group").and_then(Value::as_str).filter(|g| !g.is_empty() && g.len() <= 64).map(str::to_string);
+        // Sin monitor (ninguna pantalla, o sólo la de reemplazo que pone macOS): la pantalla pedida se crea al aceptar,
+        // virtual y del tamaño del monitor del visor donde se verá. Así un equipo sin monitor se ve desde la primera vez.
+        let ids = platform::display_ids();
+        let stand_in = ids.get(monitor - 1).map_or(ids.is_empty(), |id| platform::vdisplay::placeholder(*id));
         // Pantallas virtuales que pide (sólo dentro de un grupo, que es quien las mantiene vivas).
-        let plan = v.get("layout").filter(|l| group.is_some() && l.get("virtual").and_then(Value::as_array).is_some_and(|a| !a.is_empty())).cloned();
+        let plan = v.get("layout").cloned().or_else(|| stand_in.then(|| json!({"fixed": [], "virtual": []})))
+            .filter(|l| group.is_some() && (stand_in || l.get("virtual").and_then(Value::as_array).is_some_and(|a| !a.is_empty())));
         let nvirt = plan.as_ref().and_then(|l| l["virtual"].as_array()).map(|a| a.len().min(4)).unwrap_or(0);
         let ndisp = self.displays.lock().unwrap().len().max(1);
         let mut monitors: Vec<usize> = v.get("monitors").and_then(Value::as_array).into_iter().flatten()
@@ -895,6 +904,11 @@ impl Agent {
         }
         if monitor > self.displays.lock().unwrap().len().max(1) {
             ch.send_typed(msg::REJECT, format!("{} no tiene la pantalla {monitor}", self.name).as_bytes())?;
+            return Ok(());
+        }
+        if ids.is_empty() && !platform::vdisplay::supported() {
+            let why = format!("{} no tiene ningún monitor encendido: para verlo, instala allí el controlador de pantalla virtual de Parsec", self.name);
+            ch.send_typed(msg::REJECT, why.as_bytes())?;
             return Ok(());
         }
         let key = net::hex(&ch.peer);
@@ -985,7 +999,7 @@ impl Agent {
         let mut made = Vec::new();
         let mut vinfo = json!({});
         if let Some(plan) = &plan {
-            match self.make_virtual(plan, &name) {
+            match self.make_virtual(plan, &name, stand_in.then_some(monitor)) {
                 Ok((list, remap, idx)) => {
                     let new = |m: usize| remap.iter().find(|r| r.0 == m).map(|r| r.1).unwrap_or(m);
                     monitor = new(monitor);
@@ -1139,10 +1153,12 @@ impl Agent {
     }
 
     /// Crea las pantallas virtuales del plan del visor y las coloca junto a mis pantallas como están sus monitores.
-    /// Devuelve las pantallas, cómo cambió la numeración de las que ya había (antes, después) y el número de cada
+    /// `main`: la pantalla pedida, si este equipo no tiene ninguna (sin monitor): se crea también. Devuelve las
+    /// pantallas, cómo cambió la numeración de las que ya había o se pidieron (antes, después) y el número de cada
     /// virtual (None si no se pudo crear).
     #[allow(clippy::type_complexity)]
-    fn make_virtual(&self, plan: &Value, viewer: &str) -> Res<(Vec<platform::vdisplay::Virtual>, Vec<(usize, usize)>, Vec<Option<usize>>)> {
+    fn make_virtual(&self, plan: &Value, viewer: &str, main: Option<usize>)
+                    -> Res<(Vec<platform::vdisplay::Virtual>, Vec<(usize, usize)>, Vec<Option<usize>>)> {
         if !platform::vdisplay::supported() { return Err(platform::vdisplay::UNSUPPORTED.into()); }
         let ids_before = platform::display_ids();
         // Mis pantallas que verá en sus monitores: dónde (en su escritorio) y, si lo dice, píxeles y escala de ese monitor.
@@ -1160,6 +1176,11 @@ impl Agent {
             Some((Rect::from_json(x.get("at")?)?, (px.get(0)?.as_u64()? as u32, px.get(1)?.as_u64()? as u32), scale))
         }).collect();
         let name = format!("Kast · {viewer}");
+        // Tamaño de lo que el visor ve en una ventana (su monitor principal), y el de una pantalla suya que pide.
+        let size_of = |v: &Value| Some(((v["px"].get(0)?.as_u64()? as u32, v["px"].get(1)?.as_u64()? as u32), v["scale"].as_f64().unwrap_or(1.0)));
+        let window = size_of(&plan["window"]);
+        let asked = |m: usize| plan["fixed"].as_array().into_iter().flatten()
+            .find(|f| f["monitor"].as_u64() == Some(m as u64)).and_then(size_of).or(window);
         // Un Mac sin monitor (p. ej. con el monitor puesto en otra entrada) sólo tiene una pantalla de reemplazo de macOS,
         // que desaparece en cuanto hay otra: antes se sustituye por una virtual (del tamaño del monitor del visor donde
         // se verá, si lo dice), para que siga teniendo su pantalla además de las nuevas.
@@ -1168,7 +1189,7 @@ impl Agent {
         for (i, &id) in ids_before.iter().enumerate() {
             if !platform::vdisplay::placeholder(id) { continue; }
             let f = fixed.iter().position(|f| f.0 == id);
-            let (px, scale) = f.and_then(|f| fixed[f].2).unwrap_or((sizes.get(i).map_or((1920, 1080), |d| (d.w, d.h)), 1.0));
+            let (px, scale) = f.and_then(|f| fixed[f].2).or(asked(i + 1)).unwrap_or((sizes.get(i).map_or((1920, 1080), |d| (d.w, d.h)), 1.0));
             let v = match platform::vdisplay::create(&name, px, scale) {
                 Ok(v) => v,
                 Err(e) => { store::log(&format!("pantalla de {viewer} en lugar de la de reemplazo: {e}")); continue }
@@ -1181,6 +1202,16 @@ impl Agent {
             swap.push((id, v.id));
             stand_ins.push(v);
         }
+        // Un PC sin ningún monitor: la pantalla que pide se crea, del tamaño del monitor del visor donde se verá.
+        let mut created = None;
+        if let (true, Some(m)) = (ids_before.is_empty(), main) {
+            let (px, scale) = asked(m).unwrap_or(((1920, 1080), 1.0));
+            let v = platform::vdisplay::create(&name, px, scale)?;
+            let t = Instant::now();
+            while !platform::display_ids().contains(&v.id) && t.elapsed() < Duration::from_secs(3) { std::thread::sleep(Duration::from_millis(50)); }
+            created = Some((m, v.id));
+            stand_ins.push(v);
+        }
         let mut made: Vec<(usize, platform::vdisplay::Virtual)> = Vec::new();
         let mut last_err = None;
         for (k, w) in wanted.iter().enumerate() {
@@ -1190,7 +1221,7 @@ impl Agent {
                 Err(e) => { store::log(&format!("pantalla virtual {}×{} para {viewer}: {e}", px.0, px.1)); last_err = Some(e); }
             }
         }
-        if made.is_empty() { return Err(last_err.unwrap_or_else(|| "faltan los datos de las pantallas virtuales".into())); }
+        if made.is_empty() && !wanted.is_empty() { return Err(last_err.unwrap_or_else(|| "faltan los datos de las pantallas virtuales".into())); }
         // Dónde van: junto a mis pantallas que el visor verá en sus monitores, sin tapar las demás.
         let (ids, bounds) = (platform::display_ids(), platform::display_bounds());
         let at = |id: u32| ids.iter().position(|x| *x == id).and_then(|i| bounds.get(i).copied());
@@ -1207,7 +1238,7 @@ impl Agent {
         }).collect();
         let origins = virt::place(&pairs, &virt_in, &others);
         let moves: Vec<(u32, i32, i32)> = made.iter().zip(&origins).map(|((_, v), &(x, y))| (v.id, x, y)).collect();
-        platform::vdisplay::arrange(&moves)?;
+        if !moves.is_empty() { platform::vdisplay::arrange(&moves)?; }
         // Se aplica en un momento (el sistema puede ajustarlas un poco para que no queden huecos).
         let t = Instant::now();
         while t.elapsed() < Duration::from_secs(2) {
@@ -1220,9 +1251,11 @@ impl Agent {
         let ids_after = platform::display_ids();
         let index = |id: u32| ids_after.iter().position(|x| *x == id).map(|i| i + 1);
         // (La de reemplazo pasa a ser la virtual que la sustituye.)
-        let remap: Vec<(usize, usize)> = ids_before.iter().enumerate()
+        let mut remap: Vec<(usize, usize)> = ids_before.iter().enumerate()
             .filter_map(|(i, id)| Some((i + 1, index(swap.iter().find(|s: &&(u32, u32)| s.0 == *id).map_or(*id, |s| s.1))?)))
             .collect();
+        // (La pedida en un PC sin monitor es la que se acaba de crear.)
+        if let Some((m, id)) = created { remap.extend(index(id).map(|i| (m, i))); }
         let mut idx = vec![None; wanted.len()];
         for (k, v) in &made { idx[*k] = index(v.id); }
         self.displays_changed();
@@ -1414,11 +1447,11 @@ impl Agent {
         alts.insert(0, here);
         alts.truncate(4);
         let fresh = match st.devices.get(&b.id) {
-            Some(d) => d.seen.is_none() || d.addr != Some(addr) || d.name != b.name || d.displays != b.displays || d.sharing != b.sharing || d.vd != b.vd,
+            Some(d) => d.seen.is_none() || d.addr != Some(addr) || d.name != b.name || d.displays != b.displays || d.sharing != b.sharing || d.vd != b.vd || d.headless != b.headless,
             None => true,
         };
         st.devices.insert(b.id.clone(), Dev { name: b.name, platform: b.platform, addr: Some(addr), alts, seen: Some(Instant::now()), displays: b.displays,
-                                              sharing: b.sharing, vd: b.vd });
+                                              sharing: b.sharing, vd: b.vd, headless: b.headless });
         drop(st);
         if fresh { self.emit_state(); }
     }
@@ -1437,7 +1470,7 @@ pub fn run(port: u16) -> Res<()> {
     for s in &saved {
         if let Some(k) = net::unhex(&s.key) {
             devices.insert(id_of(&k), Dev { name: s.name.clone(), platform: s.platform.clone(), addr: s.addr.parse().ok(), alts: vec![], seen: None, displays: vec![],
-                                            sharing: true, vd: false });
+                                            sharing: true, vd: false, headless: false });
         }
     }
     let agent = Arc::new(Agent {
@@ -1475,6 +1508,9 @@ pub fn run(port: u16) -> Res<()> {
 /// Pantallas virtuales pedidas y dónde se verán, con mis monitores que mostrarán sus pantallas reales, para que el
 /// otro equipo las coloque como están mis monitores (ver virt.rs). Una virtual en una ventana tiene el tamaño de mi
 /// monitor principal y va a la derecha de lo que veo a pantalla completa (sin nada así, a la derecha de sus pantallas).
+/// Sin ningún monitor: ninguna pantalla, o sólo la de reemplazo que pone macOS.
+fn headless() -> bool { platform::display_ids().iter().all(|id| platform::vdisplay::placeholder(*id)) }
+
 fn layout_plan(screen: &Screen, more: &[Screen]) -> Value { plan_with(screen, more, &platform::local_monitors()) }
 
 fn plan_with(screen: &Screen, more: &[Screen], mons: &[LocalMon]) -> Value {
@@ -1493,7 +1529,9 @@ fn plan_with(screen: &Screen, more: &[Screen], mons: &[LocalMon]) -> Value {
         });
         json!({"at": at.json(), "px": [px.0, px.1], "scale": scale, "hidpi": scale >= 1.5})
     }).collect();
-    json!({"fixed": fixed, "virtual": virt})
+    // Lo que se ve en una ventana: del tamaño de mi monitor principal.
+    let window = main.map_or(json!({"px": [1920, 1080], "scale": 1.0}), |m| json!({"px": [m.px.0, m.px.1], "scale": m.scale}));
+    json!({"fixed": fixed, "virtual": virt, "window": window})
 }
 
 /// Evento de entrada en JSON (modo de pruebas KAST_LINK_TEST).
