@@ -66,12 +66,39 @@ pub fn install(dir: &Path) -> Res<()> {
     vdisplay::forget_support();
     let t = std::time::Instant::now();
     while !vdisplay::kast_installed() {
-        if t.elapsed() > std::time::Duration::from_secs(15) {
-            return Err("el controlador se instaló pero no arrancó (mira el Administrador de dispositivos)".into());
+        if t.elapsed() > std::time::Duration::from_secs(20) {
+            return Err(format!("el controlador se instaló pero no arrancó: {}", why_not_started(reboot.as_bool())).into());
         }
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
     Ok(())
+}
+
+/// Por qué no arrancó el adaptador, con el código de problema del Administrador de dispositivos.
+fn why_not_started(reboot: bool) -> String {
+    let mut problems = devices().into_iter().filter_map(|d| {
+        let (mut status, mut problem) = (CM_DEVNODE_STATUS_FLAGS(0), CM_PROB(0));
+        (unsafe { CM_Get_DevNode_Status(&mut status, &mut problem, d, 0) } == CR_SUCCESS).then_some((status, problem))
+    });
+    let Some((status, problem)) = problems.next() else {
+        return "Windows no creó el adaptador".into();
+    };
+    if status.0 & DN_HAS_PROBLEM.0 == 0 {
+        return if status.0 & DN_STARTED.0 != 0 { "arrancó, pero no se encuentra su interfaz".into() }
+               else if reboot { "hay que reiniciar el equipo para terminar".into() }
+               else { "sigue sin arrancar".into() };
+    }
+    let what = match problem {
+        CM_PROB_NEED_RESTART => "hay que reiniciar el equipo para terminar",
+        CM_PROB_DISABLED => "el adaptador está deshabilitado",
+        CM_PROB_FAILED_INSTALL | CM_PROB_REINSTALL => "Windows no le instaló el controlador",
+        CM_PROB_UNSIGNED_DRIVER => "Windows no aceptó su firma",
+        CM_PROB_FAILED_ADD | CM_PROB_FAILED_DRIVER_ENTRY => "el controlador no se pudo cargar",
+        CM_PROB_FAILED_START => "Windows no lo pudo iniciar",
+        CM_PROB_FAILED_POST_START => "el controlador informó de un problema",
+        _ => "Windows informa de un problema",
+    };
+    format!("{what} (código {} en el Administrador de dispositivos)", problem.0)
 }
 
 /// Quita el adaptador, el paquete y la confianza en el certificado.
@@ -156,11 +183,11 @@ unsafe fn is_kast(set: HDEVINFO, info: &SP_DEVINFO_DATA) -> bool {
     String::from_utf16_lossy(&ws).split('\0').any(|id| id.eq_ignore_ascii_case(HWID))
 }
 
-/// Adaptadores de Kast (presentes o no).
-fn devices() -> Vec<()> {
+/// Adaptadores de Kast (presentes o no), por su nodo de dispositivo.
+fn devices() -> Vec<u32> {
     unsafe {
         let Ok(set) = SetupDiGetClassDevsW(Some(&GUID_DEVCLASS_DISPLAY), PCWSTR::null(), None, SETUP_DI_GET_CLASS_DEVS_FLAGS(0)) else { return Vec::new() };
-        let n = device_infos(set).iter().filter(|i| is_kast(set, i)).map(|_| ()).collect();
+        let n = device_infos(set).iter().filter(|i| is_kast(set, i)).map(|i| i.DevInst).collect();
         let _ = SetupDiDestroyDeviceInfoList(set);
         n
     }

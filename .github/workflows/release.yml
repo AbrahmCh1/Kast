@@ -69,8 +69,20 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
+          wevtutil sl Microsoft-Windows-DriverFrameworks-UserMode/Operational /e:true
           ./bin/kast-link.exe vdd install --from bin/vdd
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ($LASTEXITCODE) {
+            # Para saber por qué: los adaptadores, el registro de instalación y los eventos de los controladores UMDF.
+            Get-PnpDevice -Class Display | Format-Table -AutoSize Status, Problem, FriendlyName, InstanceId
+            Get-Content C:\Windows\INF\setupapi.dev.log -Tail 120
+            Get-WinEvent -LogName Microsoft-Windows-DriverFrameworks-UserMode/Operational -MaxEvents 40 -ErrorAction SilentlyContinue |
+              Format-List TimeCreated, Id, LevelDisplayName, Message
+            Get-WinEvent -LogName System -MaxEvents 300 | Where-Object ProviderName -match 'WUDF|UserPnp|DriverFrameworks|Kernel-PnP|CodeIntegrity' |
+              Select-Object -First 30 | Format-List TimeCreated, ProviderName, Id, Message
+            Get-WinEvent -LogName Microsoft-Windows-CodeIntegrity/Operational -MaxEvents 15 -ErrorAction SilentlyContinue |
+              Format-List TimeCreated, Id, Message
+            exit 1
+          }
           $out = ./bin/kast-link.exe vdisplay 3440 1440 --secs 2 | Out-String
           $out
           $with = ($out -split 'despu.{1,2}s:')[0]
