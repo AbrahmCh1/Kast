@@ -52,8 +52,11 @@ New-Item -ItemType Directory -Force $pkg | Out-Null
 $obj = Join-Path $out 'obj'
 New-Item -ItemType Directory -Force $obj | Out-Null
 
-$defs = '/DUMDF_DRIVER', '/DIDDCX_VERSION_MAJOR=1', "/DIDDCX_VERSION_MINOR=$($iddcx.Split('.')[1])",
-        '/DIDDCX_MINIMUM_VERSION_REQUIRED=4', '/D_ATL_NO_WIN_SUPPORT', '/DUNICODE', '/D_UNICODE', '/DNDEBUG', '/D_WINDLL'
+# Las versiones las pone el WDK al compilar con Visual Studio. Sin UMDF_VERSION_MINOR, el controlador le pide a Windows
+# una versión mínima de UMDF imposible ((ULONG)-1, ver wdffuncenum.h) y Windows no lo carga (código 31).
+$defs = '/DUMDF_DRIVER', '/DUMDF_VERSION_MAJOR=2', "/DUMDF_VERSION_MINOR=$($umdf.Split('.')[1])",
+        '/DIDDCX_VERSION_MAJOR=1', "/DIDDCX_VERSION_MINOR=$($iddcx.Split('.')[1])", "/DIDDCX_MINIMUM_VERSION_REQUIRED=$($iddcx.Split('.')[1])",
+        '/D_ATL_NO_WIN_SUPPORT', '/DUNICODE', '/D_UNICODE', '/DNDEBUG', '/D_WINDLL'
 # Avisos como errores en nuestro código; los de las cabeceras de Windows, no. Con la biblioteca de C++ dentro (/MT): no
 # depende de que el equipo tenga instalado el Visual C++ Redistributable.
 & cl.exe /nologo /c /std:c++17 /O2 /MT /EHsc /W4 /WX /external:anglebrackets /external:W0 /GS /Gy /guard:cf /Zi /utf-8 @defs `
