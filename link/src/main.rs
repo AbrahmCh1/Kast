@@ -9,6 +9,7 @@
 //!   kast-link probe <ip:puerto> [--home dir] [--secs 10] [--text t] [--clip t] [--wheel x,y,dy] [--password p | --pair código]
 //!                                                   cliente de iOS desde la terminal (pruebas)
 //!   kast-link vdisplay <ancho> <alto> [--scale 200] [--at x,y] [--secs 5]   crear un momento una pantalla virtual (pruebas)
+//!   kast-link vdd install [--from carpeta] | uninstall | status   controlador de pantallas virtuales de Kast (Windows)
 use kast_link::{Res, agent, mobile, platform, store, stream};
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
@@ -73,6 +74,8 @@ fn run() -> Res<()> {
         Some("play") => play(&o),
         Some("probe") => probe(&o),
         Some("vdisplay") => vdisplay(&o),
+        #[cfg(windows)]
+        Some("vdd") => vdd(&o),
         Some("version") | Some("--version") => { println!("kast-link {VERSION}"); Ok(()) }
         _ => {
             println!("kast-link {VERSION} — pantalla de otro equipo por la red local (cifrado)\n");
@@ -85,6 +88,22 @@ fn run() -> Res<()> {
             Ok(())
         }
     }
+}
+
+// ---------------------------------------------------------------- controlador de pantallas virtuales (Windows)
+
+#[cfg(windows)]
+fn vdd(o: &Opts) -> Res<()> {
+    use platform::vddsetup;
+    let r = match o.pos.get(1).map(String::as_str) {
+        Some("install") => vddsetup::install(&o.get(&["--from"]).map(Into::into).unwrap_or_else(vddsetup::default_dir)),
+        Some("uninstall") => vddsetup::uninstall(),
+        _ => { println!("{}", vddsetup::status()); return Ok(()); }
+    };
+    // Con permiso de administrador (otra instancia): el resultado vuelve por un archivo.
+    vddsetup::report(o.get(&["--result"]), &r);
+    if r.is_ok() { println!("{}", vddsetup::status()); }
+    r
 }
 
 // ---------------------------------------------------------------- pruebas: pantalla virtual

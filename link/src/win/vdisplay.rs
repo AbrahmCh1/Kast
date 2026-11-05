@@ -1,8 +1,9 @@
-//! Pantallas virtuales en Windows con el controlador de pantalla virtual de Parsec (Parsec VDD, un controlador IddCx
-//! firmado que viene con Parsec o suelto: github.com/nomi-san/parsec-vdd). Windows no trae ninguno y uno propio tendría
-//! que firmarlo Microsoft, así que si no está instalado no se ofrecen (el visor lo sabe por el anuncio del equipo).
-//! El controlador quita sus pantallas si nadie le avisa cada ~100 ms: mientras haya alguna de Kast, un hilo le avisa,
-//! y si Kast se cierra o falla desaparecen solas.
+//! Pantallas virtuales en Windows. Con el controlador de Kast (Kast Virtual Display, vdd/ en el repositorio: IddCx,
+//! firmado con el certificado de Kast, se instala con `kast-link vdd install`) cada pantalla tiene el tamaño y la
+//! frecuencia exactos que se piden. Si no está, se usa el de Parsec (Parsec VDD, que viene con Parsec o suelto:
+//! github.com/nomi-san/parsec-vdd), con sus modos fijos. Si no hay ninguno, no se ofrecen (el visor lo sabe por el
+//! anuncio del equipo). Los dos quitan sus pantallas si nadie les avisa a tiempo (el de Kast en 3 s, el de Parsec en
+//! ~100 ms): mientras haya alguna de Kast, un hilo les avisa, y si Kast se cierra o falla desaparecen solas.
 use super::capture;
 use crate::Res;
 use std::sync::Mutex;
@@ -17,18 +18,30 @@ use windows::Win32::System::IO::{CancelIoEx, DeviceIoControl, GetOverlappedResul
 use windows::Win32::System::Threading::CreateEventW;
 use windows::core::{GUID, PCWSTR};
 
-/// Interfaz del adaptador de Parsec VDD.
-const ADAPTER: GUID = GUID::from_u128(0x00b41627_04c4_429e_a26e_0265cf50c8fa);
+/// Interfaz del adaptador de Kast Virtual Display y sus órdenes (vdd/include/kastdisplay.h).
+const KAST: GUID = GUID::from_u128(0xb7440647_3c97_4630_81a9_3768a8de278e);
+const KAST_ADD: u32 = 0x00222404;
+const KAST_REMOVE: u32 = 0x00222408;
+const KAST_PING: u32 = 0x0022240c;
+/// Interfaz del adaptador de Parsec VDD y sus órdenes.
+const PARSEC: GUID = GUID::from_u128(0x00b41627_04c4_429e_a26e_0265cf50c8fa);
 const ADD: u32 = 0x0022e004;
 const REMOVE: u32 = 0x0022a008;
 const UPDATE: u32 = 0x0022a00c;
 
-pub const UNSUPPORTED: &str = "falta el controlador de pantalla virtual de Parsec (Parsec VDD) en ese equipo";
+pub const UNSUPPORTED: &str = "ese equipo no tiene el controlador de pantallas virtuales (en él: Kast → Dispositivos → Instalar pantallas virtuales)";
+
+#[derive(Clone, Copy, PartialEq)]
+enum Driver {
+    Kast,
+    Parsec,
+}
 
 /// El controlador abierto y los números (suyos) de las pantallas de Kast que siguen vivas.
 struct Dev {
     h: HANDLE,
-    live: Vec<u16>,
+    driver: Driver,
+    live: Vec<u32>,
 }
 unsafe impl Send for Dev {}
 
@@ -39,7 +52,8 @@ static CREATE: Mutex<()> = Mutex::new(());
 pub struct Virtual {
     /// Número de Windows de la pantalla (\\.\DISPLAYn), el id de Kast en Windows.
     pub id: u32,
-    index: u16,
+    /// Número de la pantalla para el controlador.
+    index: u32,
     /// Escala que tenía antes de ponerle la del visor (Windows la recuerda para la siguiente que use ese número).
     restore: Option<i32>,
 }
@@ -50,42 +64,62 @@ impl Drop for Virtual {
         if let Some(rel) = self.restore { let _ = set_scale_rel(self.id, rel); }
         let mut dev = DEV.lock().unwrap();
         if let Some(d) = dev.as_mut() {
-            ioctl(d.h, REMOVE, &self.index.to_be_bytes());
-            ioctl(d.h, UPDATE, &[]);
+            match d.driver {
+                Driver::Kast => { ioctl(d.h, KAST_REMOVE, &self.index.to_le_bytes()); }
+                Driver::Parsec => {
+                    ioctl(d.h, REMOVE, &(self.index as u16).to_be_bytes());
+                    ioctl(d.h, UPDATE, &[]);
+                }
+            }
             d.live.retain(|i| *i != self.index);
         }
     }
 }
 
-/// Ruta del controlador (None si no está instalado o está desactivado).
-fn device_path() -> Option<Vec<u16>> {
+/// Ruta de un controlador (None si no está instalado o está desactivado).
+fn interface_path(guid: &GUID) -> Option<Vec<u16>> {
     unsafe {
         let mut len = 0u32;
-        if CM_Get_Device_Interface_List_SizeW(&mut len, &ADAPTER, PCWSTR::null(), CM_GET_DEVICE_INTERFACE_LIST_PRESENT) != CR_SUCCESS || len < 2 {
+        if CM_Get_Device_Interface_List_SizeW(&mut len, guid, PCWSTR::null(), CM_GET_DEVICE_INTERFACE_LIST_PRESENT) != CR_SUCCESS || len < 2 {
             return None;
         }
         let mut buf = vec![0u16; len as usize];
-        if CM_Get_Device_Interface_ListW(&ADAPTER, PCWSTR::null(), &mut buf, CM_GET_DEVICE_INTERFACE_LIST_PRESENT) != CR_SUCCESS { return None; }
+        if CM_Get_Device_Interface_ListW(guid, PCWSTR::null(), &mut buf, CM_GET_DEVICE_INTERFACE_LIST_PRESENT) != CR_SUCCESS { return None; }
         // Una lista de cadenas terminada en dos ceros: la primera.
         let end = buf.iter().position(|&c| c == 0)?;
         (end > 0).then(|| buf[..=end].to_vec())
     }
 }
 
-pub fn supported() -> bool {
-    // Se consulta en cada anuncio y cada estado: se recuerda unos segundos.
-    static LAST: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
-    let mut last = LAST.lock().unwrap();
-    if let Some((t, ok)) = *last && t.elapsed() < Duration::from_secs(5) { return ok; }
-    let ok = device_path().is_some();
-    *last = Some((Instant::now(), ok));
-    ok
+/// El controlador que se usa: el de Kast si está; si no, el de Parsec.
+fn device_path() -> Option<(Vec<u16>, Driver)> {
+    interface_path(&KAST).map(|p| (p, Driver::Kast)).or_else(|| interface_path(&PARSEC).map(|p| (p, Driver::Parsec)))
 }
+
+/// (Hay controlador, es el de Kast). Se consulta en cada anuncio y cada estado: se recuerda unos segundos.
+static LAST: Mutex<Option<(Instant, bool, bool)>> = Mutex::new(None);
+
+fn drivers() -> (bool, bool) {
+    let mut last = LAST.lock().unwrap();
+    if let Some((t, any, kast)) = *last && t.elapsed() < Duration::from_secs(5) { return (any, kast); }
+    let found = device_path().map(|(_, d)| d);
+    let (any, kast) = (found.is_some(), found == Some(Driver::Kast));
+    *last = Some((Instant::now(), any, kast));
+    (any, kast)
+}
+
+pub fn supported() -> bool { drivers().0 }
+
+/// ¿Está el controlador de Kast? (Si no, la app ofrece instalarlo.)
+pub fn kast_installed() -> bool { drivers().1 }
+
+/// Se acaba de instalar o quitar un controlador: la próxima consulta mira de nuevo.
+pub fn forget_support() { *LAST.lock().unwrap() = None; }
 
 /// Windows no pone pantallas de reemplazo que desaparezcan al añadir otra (ver la de macOS).
 pub fn placeholder(_id: u32) -> bool { false }
 
-/// Una orden al controlador (entrada de 32 bytes, salida de 4). None si no respondió.
+/// Una orden al controlador (entrada de 32 bytes, salida de 4). None si no respondió o la rechazó.
 fn ioctl(h: HANDLE, code: u32, data: &[u8]) -> Option<u32> {
     let mut inb = [0u8; 32];
     inb[..data.len()].copy_from_slice(data);
@@ -109,10 +143,12 @@ fn ioctl(h: HANDLE, code: u32, data: &[u8]) -> Option<u32> {
     }
 }
 
-/// Avisa al controlador cada 50 ms mientras haya pantallas de Kast; luego lo cierra.
-fn keep_alive() {
-    std::thread::spawn(|| loop {
-        std::thread::sleep(Duration::from_millis(50));
+/// Avisa al controlador mientras haya pantallas de Kast (al de Kast cada 500 ms, al de Parsec cada 50 ms); luego lo
+/// cierra.
+fn keep_alive(driver: Driver) {
+    let every = Duration::from_millis(if driver == Driver::Kast { 500 } else { 50 });
+    std::thread::spawn(move || loop {
+        std::thread::sleep(every);
         let mut dev = DEV.lock().unwrap();
         let Some(d) = dev.as_ref() else { return };
         if d.live.is_empty() {
@@ -120,7 +156,7 @@ fn keep_alive() {
             *dev = None;
             return;
         }
-        ioctl(d.h, UPDATE, &[]);
+        ioctl(d.h, if d.driver == Driver::Kast { KAST_PING } else { UPDATE }, &[]);
     });
 }
 
@@ -129,7 +165,7 @@ fn numbers() -> Vec<u32> { super::display_ids() }
 
 fn gdi_name(id: u32) -> Vec<u16> { format!(r"\\.\DISPLAY{id}").encode_utf16().chain([0]).collect() }
 
-/// Crea una pantalla de `px` píxeles (o el modo más parecido que tenga el controlador) con la escala del monitor del
+/// Crea una pantalla de `px` píxeles (con el de Parsec, el modo más parecido que tenga) con la escala del monitor del
 /// visor, y espera a que aparezca.
 pub fn create(_name: &str, px: (u32, u32), scale: f64) -> Res<Virtual> {
     let _one = CREATE.lock().unwrap();
@@ -137,17 +173,30 @@ pub fn create(_name: &str, px: (u32, u32), scale: f64) -> Res<Virtual> {
     let index = {
         let mut dev = DEV.lock().unwrap();
         if dev.is_none() {
-            let path = device_path().ok_or(UNSUPPORTED)?;
+            let (path, driver) = device_path().ok_or(UNSUPPORTED)?;
             let h = unsafe {
                 CreateFileW(PCWSTR(path.as_ptr()), (GENERIC_READ | GENERIC_WRITE).0, FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING,
                             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED | FILE_FLAG_WRITE_THROUGH, None)
-            }.map_err(|e| format!("no se pudo abrir el controlador de pantalla virtual de Parsec: {e}"))?;
-            *dev = Some(Dev { h, live: Vec::new() });
-            keep_alive();
+            }.map_err(|e| format!("no se pudo abrir el controlador de pantallas virtuales: {e}"))?;
+            *dev = Some(Dev { h, driver, live: Vec::new() });
+            keep_alive(driver);
         }
         let d = dev.as_mut().unwrap();
-        let index = ioctl(d.h, ADD, &[]).filter(|i| *i < 64).ok_or("el controlador de Parsec no creó la pantalla")? as u16;
-        ioctl(d.h, UPDATE, &[]);
+        let index = match d.driver {
+            // Ancho, alto y frecuencia (KAST_ADD); devuelve su número (KAST_ADDED).
+            Driver::Kast => {
+                let mut add = [0u8; 16];
+                add[..4].copy_from_slice(&px.0.to_le_bytes());
+                add[4..8].copy_from_slice(&px.1.to_le_bytes());
+                add[8..12].copy_from_slice(&60u32.to_le_bytes());
+                ioctl(d.h, KAST_ADD, &add).filter(|i| *i > 0).ok_or("el controlador de Kast no creó la pantalla")?
+            }
+            Driver::Parsec => {
+                let index = ioctl(d.h, ADD, &[]).filter(|i| *i < 64).ok_or("el controlador de Parsec no creó la pantalla")?;
+                ioctl(d.h, UPDATE, &[]);
+                index
+            }
+        };
         d.live.push(index);
         index
     };

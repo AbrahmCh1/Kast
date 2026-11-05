@@ -17,3 +17,7 @@ ad/audio/out/
 ad/audio/takes*/*
 !ad/audio/takes3/eduardo.*
 ad/**/__pycache__/
+vdd/packages/
+vdd/tools/
+vdd/out/
+vdd/out-build.log

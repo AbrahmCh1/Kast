@@ -7,6 +7,7 @@ mod color;
 mod input;
 mod mf;
 pub mod vdisplay;
+pub mod vddsetup;
 
 pub use input::Injector;
 

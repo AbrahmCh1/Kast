@@ -379,6 +379,12 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; m
           <div class="sub">Pulsa «Dar permiso» y activa Kast en Ajustes del Sistema → Privacidad y seguridad → Accesibilidad. Si ya aparecía activado (pasa al actualizar Kast), «Dar permiso» quita la entrada antigua: vuelve a activarlo. Sin él, sólo podrán ver tus pantallas.</div></div>
         <button class="btn primary" id="inputPermBtn">Dar permiso</button>
       </div>
+      <div class="card row req" id="linkVdd" hidden style="margin-top:12px">
+        <div class="ic dev-ic"><svg class="i"><use href="#i-mon"/></svg></div>
+        <div class="body"><div style="font-weight:600" id="vddTitle">Instala las pantallas virtuales de Kast</div>
+          <div class="sub" id="vddSub">Así, quien vea este equipo puede añadirle pantallas del tamaño exacto de sus monitores. Windows pedirá permiso de administrador una vez.</div></div>
+        <button class="btn primary" id="vddBtn">Instalar</button>
+      </div>
       <h2>Acceso a este equipo</h2>
       <div class="card access" id="linkAccess">
         <div class="arow">
@@ -1122,6 +1128,12 @@ function renderLink() {
   $('#meSharing').checked = me.sharing;
   $('#linkPerm').hidden = !(me.capture === false && me.sharing);
   $('#linkInputPerm').hidden = !(me.input === false && me.sharing);
+  // Windows: el controlador de pantallas virtuales de Kast, si viene con esta instalación y aún no está puesto.
+  const vdd = me.vdd || {};
+  $('#linkVdd').hidden = !(vdd.package && !vdd.kast);
+  $('#vddBtn').disabled = !!vdd.busy;
+  $('#vddBtn').textContent = vdd.busy ? 'Instalando…' : 'Instalar';
+  $('#vddTitle').textContent = me.headless ? 'Este equipo no tiene monitor: instala las pantallas virtuales de Kast' : 'Instala las pantallas virtuales de Kast';
   $('#nlink').textContent = L.devices.filter(d => d.online).length || '';
   renderAccess();
 
@@ -1245,7 +1257,7 @@ function renderLink() {
         ${rows}${vrows}
         ${d.vd && mons.length ? `<button class="btn ghost vadd" data-a="vadd"${sel.virt.length >= 4 ? ' disabled' : ` title="Una pantalla más en ${esc(d.name)}, ${free().length ? 'del tamaño de uno de tus monitores' : 'en una ventana, del tamaño de tu monitor principal'}"`}>${icon('plus')}Añadir pantalla virtual</button>` : ''}
         ${d.headless && d.vd ? `<div class="vhead">${esc(d.name)} no tiene monitor: al conectar, Kast le crea una pantalla del tamaño del monitor tuyo donde la veas (o del principal, si es en una ventana)</div>` : ''}
-        ${!d.vd && d.platform === 'windows' && d.online && d.sharing && mons.length ? `<div class="vhead">${d.headless ? `${esc(d.name)} no tiene monitor: para verlo, instala allí` : `Para añadirle pantallas virtuales, instala en ${esc(d.name)}`} el controlador de pantalla virtual de Parsec</div>` : ''}
+        ${!d.vd && d.platform === 'windows' && d.online && d.sharing && mons.length ? `<div class="vhead">${d.headless ? `${esc(d.name)} no tiene monitor: para verlo, instala allí` : `Para añadirle pantallas virtuales, instala en ${esc(d.name)}`} las pantallas virtuales de Kast (en ese equipo: Dispositivos → Instalar)</div>` : ''}
         ${mons.length ? mapHtml() : ''}`;
       $$('[data-show]', sbox).forEach(x => {
         const m = +x.dataset.show;
@@ -1450,6 +1462,7 @@ $('#devById').onclick = async () => {
 };
 
 $('#meSharing').onchange = e => linkCmd({ cmd: 'sharing', enabled: e.target.checked });
+$('#vddBtn').onclick = () => linkCmd({ cmd: 'vdd_install' });
 $('#permBtn').onclick = () => linkCmd({ cmd: 'request_capture' });
 $('#inputPermBtn').onclick = () => linkCmd({ cmd: 'request_input' });
 $('#devAdd').onclick = async () => {

@@ -1,0 +1,74 @@
+;
+; KastDisplay.inf - Kast Virtual Display: pantallas virtuales para Kast Link (Indirect Display, UMDF 2).
+; Basado en IddSampleDriver.inf de Microsoft (Windows-driver-samples, MS-PL).
+;
+
+[Version]
+PnpLockDown=1
+Signature="$Windows NT$"
+ClassGUID={4D36E968-E325-11CE-BFC1-08002BE10318}
+Class=Display
+ClassVer=2.0
+Provider=%ManufacturerName%
+CatalogFile=KastDisplay.cat
+DriverVer=
+
+[Manufacturer]
+%ManufacturerName%=Standard,NT$ARCH$.10.0...18362
+
+[Standard.NT$ARCH$.10.0...18362]
+%DeviceName%=KastDisplay_Install, Root\KastDisplay
+
+[SourceDisksFiles]
+KastDisplay.dll=1
+
+[SourceDisksNames]
+1=%DiskName%
+
+; =================== Dispositivo UMDF ==================================
+
+[KastDisplay_Install.NT]
+Include=WUDFRD.inf
+Needs=WUDFRD.NT
+CopyFiles=UMDriverCopy
+
+[KastDisplay_Install.NT.hw]
+Include=WUDFRD.inf
+Needs=WUDFRD.NT.HW
+AddReg=KastDisplay_HardwareDeviceSettings
+
+[KastDisplay_HardwareDeviceSettings]
+HKR,,"UpperFilters",%REG_MULTI_SZ%,"IndirectKmd"
+HKR,"WUDF","DeviceGroupId",%REG_SZ%,"KastDisplayGroup"
+; Kast pide las pantallas desde la sesion del usuario: sistema y administradores, todo; usuarios de la sesion, leer y escribir.
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)"
+
+[KastDisplay_Install.NT.Services]
+Include=WUDFRD.inf
+Needs=WUDFRD.NT.Services
+
+[KastDisplay_Install.NT.Wdf]
+UmdfService=KastDisplay,KastDisplay_Service
+UmdfServiceOrder=KastDisplay
+UmdfKernelModeClientPolicy=AllowKernelModeClients
+
+[KastDisplay_Service]
+UmdfLibraryVersion=$UMDFVERSION$
+ServiceBinary=%12%\UMDF\KastDisplay.dll
+UmdfExtensions=IddCx0102
+
+[DestinationDirs]
+UMDriverCopy=12,UMDF
+
+[UMDriverCopy]
+KastDisplay.dll
+
+; =================== Textos ==================================
+
+[Strings]
+ManufacturerName="Kast"
+DiskName="Kast Virtual Display Installation"
+DeviceName="Kast Virtual Display"
+
+REG_MULTI_SZ=0x00010000
+REG_SZ=0x00000000

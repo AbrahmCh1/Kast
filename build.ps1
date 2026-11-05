@@ -40,6 +40,12 @@ if ($cargo) {
     Write-Warning 'cargo no encontrado: se omite Kast Link (https://rustup.rs)'
 }
 
+# Controlador de pantallas virtuales de Kast, si ya está compilado y firmado (vdd/build.ps1): junto a kast-link, en vdd\.
+if (Test-Path vdd/out/KastDisplay/kastdisplay.cat) {
+    New-Item -ItemType Directory -Force bin/vdd | Out-Null
+    Copy-Item vdd/out/KastDisplay/*, vdd/kast-vdd.cer bin/vdd/ -Force
+}
+
 Remove-Item bin/*.pdb, bin/*.lib -ErrorAction SilentlyContinue
 Copy-Item third_party/webview2/WebView2Loader.dll bin/ -Force
 if (-not (Test-Path bin/kast.ini)) { Copy-Item kast.ini bin/kast.ini }

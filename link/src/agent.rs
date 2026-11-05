@@ -306,7 +306,7 @@ impl Agent {
         let pairing = st.pairing.as_ref().filter(|p| !p.expired()).map(|p| json!({"code": p.code, "control": p.control, "secs": p.secs_left()}));
         let me = json!({"id": self.id, "short_id": net::short_id(&self.id), "name": self.name, "platform": store::platform(), "port": self.port,
                         "sharing": self.sharing.load(Ordering::Relaxed), "capture": platform::capture_allowed(), "input": platform::input_allowed(),
-                        "vd": platform::vdisplay::supported(), "headless": headless(),
+                        "vd": platform::vdisplay::supported(), "headless": headless(), "vdd": vdd_state(),
                         "displays": self.displays.lock().unwrap().iter().map(|(w, h)| json!([w, h])).collect::<Vec<_>>()});
         drop(st);
         let all: Vec<Value> = devices.into_iter().chain(pending).collect();
@@ -436,6 +436,28 @@ impl Agent {
             "request_input" => {
                 platform::request_input();
                 self.toast("Activa Kast en «Accesibilidad» para que otros puedan controlar este equipo", false);
+            }
+            // Windows: instalar el controlador de pantallas virtuales de Kast (Windows pide permiso de administrador).
+            #[cfg(windows)]
+            "vdd_install" => {
+                if VDD_BUSY.swap(true, Ordering::SeqCst) { return; }
+                self.emit_state();
+                let a = self.clone();
+                std::thread::spawn(move || {
+                    let r = platform::vddsetup::install(&platform::vddsetup::default_dir());
+                    VDD_BUSY.store(false, Ordering::SeqCst);
+                    match r {
+                        Ok(()) => {
+                            store::log("pantallas virtuales de Kast instaladas");
+                            a.toast("Pantallas virtuales de Kast instaladas: ya se le pueden añadir pantallas a este equipo", false);
+                        }
+                        Err(e) => {
+                            store::log(&format!("instalar las pantallas virtuales de Kast: {e}"));
+                            a.toast(format!("No se instalaron las pantallas virtuales: {e}"), true);
+                        }
+                    }
+                    a.displays_changed();
+                });
             }
             "request_capture" => {
                 platform::request_capture();
@@ -1508,6 +1530,19 @@ pub fn run(port: u16) -> Res<()> {
 /// Pantallas virtuales pedidas y dónde se verán, con mis monitores que mostrarán sus pantallas reales, para que el
 /// otro equipo las coloque como están mis monitores (ver virt.rs). Una virtual en una ventana tiene el tamaño de mi
 /// monitor principal y va a la derecha de lo que veo a pantalla completa (sin nada así, a la derecha de sus pantallas).
+/// Instalando el controlador de pantallas virtuales de Kast (Windows).
+#[cfg(windows)]
+static VDD_BUSY: AtomicBool = AtomicBool::new(false);
+
+/// Windows: ¿está el controlador de Kast, viene con esta instalación (para ofrecerlo) y se está instalando?
+fn vdd_state() -> Value {
+    #[cfg(windows)]
+    return json!({"kast": platform::vdisplay::kast_installed(), "busy": VDD_BUSY.load(Ordering::Relaxed),
+                  "package": platform::vddsetup::default_dir().join("KastDisplay.inf").exists()});
+    #[cfg(not(windows))]
+    Value::Null
+}
+
 /// Sin ningún monitor: ninguna pantalla, o sólo la de reemplazo que pone macOS.
 fn headless() -> bool { platform::display_ids().iter().all(|id| platform::vdisplay::placeholder(*id)) }
 

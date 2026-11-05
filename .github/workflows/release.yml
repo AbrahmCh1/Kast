@@ -26,6 +26,19 @@ jobs:
         with:
           version: 0.17.0
 
+      # Antes que Kast: build.ps1 lo copia a bin\vdd si quedó firmado (sin los secretos, p. ej. en un fork, se compila
+      # igual pero no se empaqueta).
+      - name: Controlador de pantallas virtuales
+        shell: pwsh
+        env:
+          KAST_VDD_PFX: ${{ secrets.KAST_VDD_PFX }}
+          KAST_VDD_PFX_PASSWORD: ${{ secrets.KAST_VDD_PFX_PASSWORD }}
+        run: |
+          $v = if ($env:GITHUB_REF_TYPE -eq 'tag') { ($env:GITHUB_REF_NAME -replace '^v', '' -replace '-.*$', '') + '.0' }
+               else { "1.0.$env:GITHUB_RUN_NUMBER.0" }
+          ./vdd/build.ps1 -Version $v
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
       - name: Compilar
         shell: pwsh
         run: |
@@ -49,6 +62,23 @@ jobs:
           ./bin/kast-link.exe play link/testdata/patron-windows.klnk
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
+      # En el runner (desechable y con permiso de administrador): instalar el controlador firmado y crear una pantalla
+      # ultrapanorámica, que el de Parsec no tiene, para ver que sale con su tamaño exacto y se quita al soltarla.
+      - name: Probar el controlador de pantallas virtuales
+        if: hashFiles('bin/vdd/kastdisplay.cat') != ''
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          ./bin/kast-link.exe vdd install --from bin/vdd
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $out = ./bin/kast-link.exe vdisplay 3440 1440 --secs 2 | Out-String
+          $out
+          $with = ($out -split 'despu.{1,2}s:')[0]
+          if ($with -notmatch '3440x1440 p') { throw 'la pantalla virtual no salió con 3440x1440' }
+          if (($out -split 'despu.{1,2}s:')[1] -match '3440x1440 p') { throw 'la pantalla virtual no se quitó' }
+          ./bin/kast-link.exe vdd uninstall
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
       - name: Empaquetar
         shell: pwsh
         run: |
@@ -57,6 +87,11 @@ jobs:
           New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item bin/kast.exe, bin/kastd.exe, bin/kast-link.exe, bin/WebView2Loader.dll, bin/kast.ini, LICENSE, README.md $dir
           Copy-Item third_party/webview2/LICENSE.txt "$dir/WebView2-LICENSE.txt"
+          # El controlador de pantallas virtuales firmado (lo instala la app: Dispositivos → Instalar pantallas virtuales).
+          if (Test-Path bin/vdd/kastdisplay.cat) {
+            Copy-Item bin/vdd $dir -Recurse
+            Copy-Item vdd/LICENSE.txt "$dir/vdd/LICENSE.txt"
+          }
           Compress-Archive -Path "$dir/*" -DestinationPath "dist/$name.zip"
           $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()
           "$hash  $name.zip" | Out-File "dist/$name.zip.sha256" -Encoding ascii -NoNewline
